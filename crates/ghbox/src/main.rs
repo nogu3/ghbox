@@ -15,6 +15,7 @@ use crate::app::App;
 enum Msg {
     Key(crossterm::event::KeyEvent),
     Fetched(Box<ghbox_core::Result<Parsed>>),
+    Redraw,
 }
 
 #[tokio::main]
@@ -45,6 +46,11 @@ async fn run(
             match crossterm::event::read() {
                 Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => {
                     if input_tx.send(Msg::Key(key)).is_err() {
+                        break;
+                    }
+                }
+                Ok(Event::Resize(..)) => {
+                    if input_tx.send(Msg::Redraw).is_err() {
                         break;
                     }
                 }
@@ -90,6 +96,7 @@ async fn run(
                 }
                 Err(e) => app.status = format!("fetch error: {e}"),
             },
+            Msg::Redraw => {}
         }
         if app.should_quit {
             break;
