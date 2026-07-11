@@ -13,8 +13,11 @@ pub struct CommentFilter {
 
 impl CommentFilter {
     pub fn new(viewer_login: &str, extra_patterns: &[String]) -> Result<Self> {
-        let mention = Regex::new(&format!(r"@{}(?:[^\w-]|$)", regex::escape(viewer_login)))
-            .map_err(|e| Error::Config(format!("bad viewer login: {e}")))?;
+        let mention = Regex::new(&format!(
+            r"(?i)@{}(?:[^\w-]|$)",
+            regex::escape(viewer_login)
+        ))
+        .map_err(|e| Error::Config(format!("bad viewer login: {e}")))?;
         let keyword = Regex::new(r"(?i)(merge|マージ)").expect("static regex");
         let extra = extra_patterns
             .iter()
@@ -94,5 +97,16 @@ mod tests {
     #[test]
     fn invalid_extra_pattern_is_config_error() {
         assert!(CommentFilter::new("nogu3", &["(".to_string()]).is_err());
+    }
+
+    #[test]
+    fn mention_is_case_insensitive() {
+        assert!(filter().is_merge_request("@NoGu3 please merge"));
+    }
+
+    #[test]
+    fn matches_mention_at_end_of_body() {
+        // exercises the `$` alternative of the mention boundary
+        assert!(filter().is_merge_request("please merge @nogu3"));
     }
 }
