@@ -13,7 +13,7 @@ pub struct CommentFilter {
 
 impl CommentFilter {
     pub fn new(viewer_login: &str, extra_patterns: &[String]) -> Result<Self> {
-        let mention = Regex::new(&format!(r"@{}\b", regex::escape(viewer_login)))
+        let mention = Regex::new(&format!(r"@{}(?:[^\w-]|$)", regex::escape(viewer_login)))
             .map_err(|e| Error::Config(format!("bad viewer login: {e}")))?;
         let keyword = Regex::new(r"(?i)(merge|マージ)").expect("static regex");
         let extra = extra_patterns
@@ -75,6 +75,12 @@ mod tests {
     fn rejects_mention_of_longer_login() {
         // @nogu3x is a different user; \b prevents prefix match
         assert!(!filter().is_merge_request("@nogu3x please merge"));
+    }
+
+    #[test]
+    fn rejects_mention_of_hyphenated_longer_login() {
+        // @nogu3-fork is a different user; hyphen must not count as a boundary
+        assert!(!filter().is_merge_request("@nogu3-fork please merge"));
     }
 
     #[test]
