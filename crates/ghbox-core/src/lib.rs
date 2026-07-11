@@ -4,6 +4,7 @@
 pub mod config;
 mod error;
 pub mod filter;
+pub mod github;
 pub mod store;
 pub mod types;
 
