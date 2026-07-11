@@ -151,13 +151,27 @@ pub async fn fetch(token: &str) -> Result<Parsed> {
 
 pub fn parse_response(json: &str) -> Result<Parsed> {
     let resp: GqlResponse = serde_json::from_str(json)?;
-    if let Some(errors) = resp.errors {
-        let messages: Vec<String> = errors.into_iter().map(|e| e.message).collect();
-        return Err(Error::Api(messages.join("; ")));
-    }
-    let data = resp
-        .data
-        .ok_or_else(|| Error::Api("response has neither data nor errors".into()))?;
+    // GitHub may return HTTP 200 with both `errors` and usable `data` (e.g. one
+    // SAML-protected org node is FORBIDDEN while the rest of the query succeeds).
+    // Prefer partial data over failing the whole fetch; only treat `errors` as
+    // fatal when there is no data to fall back on.
+    let data = match resp.data {
+        Some(data) => data,
+        None => {
+            let messages: Vec<String> = resp
+                .errors
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| e.message)
+                .collect();
+            let message = if messages.is_empty() {
+                "response has neither data nor errors".into()
+            } else {
+                messages.join("; ")
+            };
+            return Err(Error::Api(message));
+        }
+    };
 
     let mut comments = Vec::new();
     for pr in data.merge.nodes.into_iter().flatten() {
@@ -287,6 +301,28 @@ mod tests {
         let json = r#"{ "data": null, "errors": [ { "message": "rate limited" } ] }"#;
         let err = parse_response(json).unwrap_err();
         assert!(matches!(err, Error::Api(m) if m.contains("rate limited")));
+    }
+
+    #[test]
+    fn partial_data_with_errors_still_parses() {
+        // GitHub returns 200 with both `errors` and usable `data` (e.g. SAML-protected org);
+        // data must win
+        let json = r#"{
+          "data": {
+            "viewer": { "login": "nogu3" },
+            "merge": { "nodes": [] },
+            "review": { "nodes": [] }
+          },
+          "errors": [ { "message": "Resource protected by organization SAML enforcement" } ]
+        }"#;
+        let parsed = parse_response(json).unwrap();
+        assert_eq!(parsed.viewer_login, "nogu3");
+    }
+
+    #[test]
+    fn neither_data_nor_errors_is_api_error() {
+        let err = parse_response(r#"{}"#).unwrap_err();
+        assert!(matches!(err, Error::Api(_)));
     }
 
     #[test]
