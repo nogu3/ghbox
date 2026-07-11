@@ -288,4 +288,44 @@ mod tests {
         let err = parse_response(json).unwrap_err();
         assert!(matches!(err, Error::Api(m) if m.contains("rate limited")));
     }
+
+    #[test]
+    fn comment_without_database_id_is_skipped() {
+        let json = r#"{
+          "data": {
+            "viewer": { "login": "nogu3" },
+            "merge": {
+              "nodes": [
+                {
+                  "number": 1,
+                  "title": "t",
+                  "url": "u",
+                  "repository": { "nameWithOwner": "o/r" },
+                  "comments": {
+                    "nodes": [
+                      { "author": { "login": "bot" }, "body": "no id", "createdAt": "2026-01-01T00:00:00Z" }
+                    ]
+                  }
+                }
+              ]
+            },
+            "review": { "nodes": [] }
+          }
+        }"#;
+        let parsed = parse_response(json).unwrap();
+        assert!(parsed.comments.is_empty());
+    }
+
+    #[test]
+    fn review_node_without_repository_is_skipped() {
+        let json = r#"{
+          "data": {
+            "viewer": { "login": "nogu3" },
+            "merge": { "nodes": [] },
+            "review": { "nodes": [ {} ] }
+          }
+        }"#;
+        let parsed = parse_response(json).unwrap();
+        assert!(parsed.review_requests.is_empty());
+    }
 }
