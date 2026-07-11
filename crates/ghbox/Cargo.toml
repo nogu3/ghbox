@@ -5,4 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+anyhow = "1.0.103"
+crossterm = "0.29.0"
 ghbox-core = { path = "../ghbox-core" }
+open = "5.3.6"
+ratatui = "0.30.2"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "sync", "time"] }
