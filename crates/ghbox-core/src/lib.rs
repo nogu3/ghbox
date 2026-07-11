@@ -2,6 +2,7 @@
 //! for "PRs where the ball is in my court" on GitHub.
 
 mod error;
+pub mod filter;
 pub mod types;
 
 pub use error::{Error, Result};
