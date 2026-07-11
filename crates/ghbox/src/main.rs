@@ -77,13 +77,15 @@ async fn run(
             Msg::Key(key) => handle_key(key.code, &mut app, &store, &tx, &token),
             Msg::Fetched(result) => match *result {
                 Ok(parsed) => {
-                    let filter = CommentFilter::new(&parsed.viewer_login, &config.extra_patterns)?;
-                    match build_inbox(&parsed, &filter, &store) {
-                        Ok(inbox) => {
-                            app.set_inbox(inbox);
-                            app.status = format!("updated {}", now_hms());
-                        }
-                        Err(e) => app.status = format!("error: {e}"),
+                    match CommentFilter::new(&parsed.viewer_login, &config.extra_patterns) {
+                        Ok(filter) => match build_inbox(&parsed, &filter, &store) {
+                            Ok(inbox) => {
+                                app.set_inbox(inbox);
+                                app.status = format!("updated {}", now_hms());
+                            }
+                            Err(e) => app.status = format!("error: {e}"),
+                        },
+                        Err(e) => app.status = format!("config error: {e}"),
                     }
                 }
                 Err(e) => app.status = format!("fetch error: {e}"),
