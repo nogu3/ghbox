@@ -323,6 +323,14 @@ impl std::fmt::Display for KeyBinding {
     }
 }
 
+impl KeyBinding {
+    /// The binding's primary key — the first one listed. A `KeyBinding` is
+    /// always non-empty (defaults are non-empty and deserialize rejects `[]`).
+    pub fn primary(&self) -> KeySpec {
+        self.0[0]
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Keybindings {
@@ -697,5 +705,11 @@ filter = { type = "command", command = "jq -r .id" }
         );
         assert_eq!(KeySpec::Left.to_string(), "left");
         assert_eq!(KeySpec::Right.to_string(), "right");
+    }
+
+    #[test]
+    fn keybinding_primary_returns_first_key() {
+        let cfg = parse("[keybindings]\ndown = [\"down\", \"j\"]\n").unwrap();
+        assert_eq!(cfg.keybindings.down.primary(), KeySpec::Down);
     }
 }
