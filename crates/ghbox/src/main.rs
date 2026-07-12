@@ -2,6 +2,8 @@ mod app;
 mod ui;
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use crossterm::event::{Event, KeyCode, KeyEventKind};
@@ -39,18 +41,29 @@ async fn fetch_and_build(
 /// on a `spawn_blocking` thread instead, via `Handle::block_on` — the
 /// future never needs to move across threads once it starts, only the
 /// plain-data inputs and the result do.
+///
+/// `fetching` guards against overlapping fetches: a black-holed HTTP
+/// connection would otherwise pin one blocking-pool thread per poll tick.
+/// Returns `false` (no task spawned) if a fetch is already in flight.
 fn spawn_fetch(
     tx: &mpsc::UnboundedSender<Msg>,
+    fetching: &Arc<AtomicBool>,
     token: String,
     sections: Vec<Section>,
     db_path: std::path::PathBuf,
-) {
+) -> bool {
+    if fetching.swap(true, Ordering::SeqCst) {
+        return false;
+    }
     let tx = tx.clone();
+    let fetching = Arc::clone(fetching);
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         let result = handle.block_on(fetch_and_build(&token, &sections, &db_path));
         let _ = tx.send(Msg::Sections(Box::new(result)));
+        fetching.store(false, Ordering::SeqCst);
     });
+    true
 }
 
 #[tokio::main]
@@ -96,10 +109,12 @@ async fn run(
     });
 
     // Periodic fetch.
+    let fetching = Arc::new(AtomicBool::new(false));
     let fetch_tx = tx.clone();
     let fetch_token = token.clone();
     let fetch_sections_cfg = config.sections.clone();
     let fetch_db_path = config.db_path.clone();
+    let fetch_fetching = Arc::clone(&fetching);
     let interval_secs = config.poll_interval_secs.max(30);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
@@ -108,8 +123,10 @@ async fn run(
             if fetch_tx.is_closed() {
                 break;
             }
+            // Skip this tick if a fetch is still in flight; no message needed.
             spawn_fetch(
                 &fetch_tx,
+                &fetch_fetching,
                 fetch_token.clone(),
                 fetch_sections_cfg.clone(),
                 fetch_db_path.clone(),
@@ -123,7 +140,9 @@ async fn run(
 
     while let Some(msg) = rx.recv().await {
         match msg {
-            Msg::Key(key) => handle_key(key.code, &mut app, &config, &store, &tx, &token),
+            Msg::Key(key) => {
+                handle_key(key.code, &mut app, &config, &store, &tx, &fetching, &token)
+            }
             Msg::Sections(result) => match *result {
                 Ok(results) => match app.apply_results(results) {
                     Some(e) => app.status = format!("filter error: {e}"),
@@ -169,6 +188,7 @@ fn handle_key(
     config: &Config,
     store: &Store,
     tx: &mpsc::UnboundedSender<Msg>,
+    fetching: &Arc<AtomicBool>,
     token: &str,
 ) {
     let kb = &config.keybindings;
@@ -209,13 +229,18 @@ fn handle_key(
             Err(e) => app.status = format!("db error: {e}"),
         }
     } else if key_matches(kb.refresh, code) {
-        app.status = "refreshing...".into();
-        spawn_fetch(
+        let spawned = spawn_fetch(
             tx,
+            fetching,
             token.to_string(),
             config.sections.clone(),
             config.db_path.clone(),
         );
+        app.status = if spawned {
+            "refreshing...".into()
+        } else {
+            "fetch already in progress".into()
+        };
     } else if code == KeyCode::Down {
         app.next();
     } else if code == KeyCode::Up {

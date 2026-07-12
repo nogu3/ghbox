@@ -141,7 +141,9 @@ struct PrNode {
 
 pub async fn fetch_sections(token: &str, sections: &[Section]) -> Result<Fetched> {
     let (query, variables) = build_query(sections);
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
     let response = client
         .post("https://api.github.com/graphql")
         .bearer_auth(token)
