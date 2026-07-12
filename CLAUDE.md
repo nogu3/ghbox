@@ -32,32 +32,36 @@ ghbox/
 
 ## データフロー
 
-1. GraphQL `search(query: "is:pr mentions:@me", type: ISSUE)` + `comments(last: 50)` を1クエリで取得
-2. 各コメントを正規表現でフィルタ: `(?i)(merge|マージ)` と `@{viewer_login}` を**同一コメント本文内**に両方含むもののみ採用
-3. レビュー依頼は `is:pr is:open review-requested:@me` で別クエリ(フィルタ不要)
-4. リポジトリごとにグルーピングして表示
+1. config の各セクションから GraphQL search を alias(s0, s1, ...)で並べた1クエリを動的組み立てし、`viewer { login }` と合わせて1リクエストで取得(検索文字列は variables で渡す)
+2. comment-mention フィルタを持つセクションのみ `comments(last: 50)` を追加取得
+3. セクションごとにフィルタ適用: なし / comment-mention(同一コメント本文内に `@viewer` と `(?i)(merge|マージ)` または extra_patterns) / command(外部コマンドに JSONL を渡し残す id を受け取る)
+4. 既読除外 → repo 昇順・時刻降順ソート → タブ+テーブルで表示
 
 ## セクション
 
-- **マージ依頼**: 上記コメントフィルタを通過したPR
-- **レビュー依頼**: review-requested:@me のopen PR
+config.toml の `[[sections]]` で自由定義(タイトル + GitHub 検索クエリ + フィルタ + カラム)。
+config がなければ組み込みデフォルト2セクション(マージ依頼 + レビュー依頼)で動作する。
+
+- フィルタ種別: なし / `comment-mention`(同一コメント内 mention+merge。コアロジック) / `command`(外部コマンド。stdin に JSONL、stdout に残す id)
+- カラム: `repo` / `number` / `title` / `author` / `comment` / `updated` / `created`
 
 ## 既読管理の原則
 
-- 既読は **コメントID単位**(PR単位ではない)。同一PRに新しい依頼コメントが来たら再浮上する
-- レビュー依頼はPR + review request単位
-- SQLiteスキーマ変更時はマイグレーションを書く(NAS上のDBを壊さない)
+- コメントアイテム: **コメントID単位**(kind=`merge_comment`)。同一PRに新しい依頼コメントが来たら再浮上する
+- PRアイテム: **PR + updatedAt 単位**(kind=`pr`、upsert)。マーク後に PR が更新されたら再浮上する
+- 既読はセクション横断でグローバル(既読キーはアイテム自体から導出)
+- SQLiteスキーマ変更時はマイグレーションを書く(append-only。NAS上のDBを壊さない)。DB の user_version がバイナリより新しい場合は起動拒否
 
-## キーバインド(MVP)
+## キーバインド(デフォルト、config でリマップ可)
 
-| キー | 動作 |
-|---|---|
-| j / k | 上下移動 |
-| Tab | セクション切替 |
-| Enter | ブラウザでPRを開く |
-| d | 対応済みマーク(コメントIDをSQLiteに記録) |
-| r | 手動リフレッシュ |
-| q | 終了 |
+| キー | アクション | 動作 |
+|---|---|---|
+| j / k | down / up | 上下移動(矢印キーは常時有効) |
+| Tab / BackTab | next_section / prev_section | セクション巡回 |
+| Enter | open | ブラウザでPRを開く |
+| d | done | 対応済みマーク |
+| r | refresh | 手動リフレッシュ |
+| q | quit | 終了 |
 
 ## 開発コマンド
 
@@ -73,7 +77,7 @@ cargo fmt --all
 - UNIX哲学: ghbox-core は副作用(端末描画)を持たない。TUIは表示と入力のみ
 - エラーは anyhow(バイナリ) / thiserror(lib)
 - GraphQLクエリは .graphql ファイルに分離せず、まずは文字列リテラルで開始(小さく始める)
-- 設定ファイルは `$XDG_CONFIG_HOME/ghbox/config.toml`(ポーリング間隔、DB パス、正規表現の追加パターン)
+- 設定ファイルは `$XDG_CONFIG_HOME/ghbox/config.toml`(sections / theme / keybindings / ポーリング間隔 / DB パス。`deny_unknown_fields` で typo 検出、不正 config は起動時に即エラー終了)
 - コミットメッセージは英語、conventional commits
 
 ## 未確定事項(実装しながら決める)

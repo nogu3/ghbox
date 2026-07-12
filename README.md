@@ -30,14 +30,41 @@ ghbox
 | r | 手動リフレッシュ |
 | q | 終了 |
 
+キーは `[keybindings]` でリマップできる(矢印キーの上下移動は常時有効)。
+
 ## Config
 
-`$XDG_CONFIG_HOME/ghbox/config.toml` (無ければデフォルト値):
+`$XDG_CONFIG_HOME/ghbox/config.toml`(無ければ組み込みデフォルト: マージ依頼 + レビュー依頼の2セクション):
 
 ```toml
-poll_interval_secs = 300                 # ポーリング間隔(秒、最小30)
-db_path = "/path/to/nas/ghbox/state.db"  # 既読DB。デフォルト: $XDG_DATA_HOME/ghbox/state.db
-extra_patterns = ["(?i)ship\\s*it"]      # merge/マージ に追加するキーワード正規表現
+poll_interval_secs = 300            # ポーリング間隔(秒、最小30)
+db_path = "/nas/ghbox/state.db"     # 既読DB。デフォルト: $XDG_DATA_HOME/ghbox/state.db
+
+[[sections]]
+title = "マージ依頼"
+query = "is:pr is:open mentions:@me"
+columns = ["repo", "number", "title", "author", "comment"]
+filter = { type = "comment-mention", extra_patterns = ["(?i)ship\\s*it"] }
+
+[[sections]]
+title = "レビュー依頼"
+query = "is:pr is:open review-requested:@me"
+# filter 省略 = 検索結果そのまま。columns 省略 = ["repo", "number", "title", "author", "updated"]
+
+[[sections]]
+title = "自分が関わるPR"
+query = "is:pr is:open involves:@me"
+# 外部コマンドフィルタ: stdin に1行1アイテムの JSON(id フィールド付き)、
+# stdout に残すアイテムの id を1行1個返す。タイムアウト10秒
+filter = { type = "command", command = "jq -r 'select(.pr_author != \"nogu3\") | .id'" }
+
+[theme]                             # 省略キーはデフォルト。ratatui 名前付き色(小文字) or "#rrggbb"
+tab_active = "yellow"
+selection_bg = "blue"
+
+[keybindings]                       # 省略キーはデフォルト。1文字 or tab/backtab/enter/up/down/esc
+quit = "q"
+done = "d"
 ```
 
 ## Development
