@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use ghbox_core::inbox::{SectionData, SectionResult};
 use ghbox_core::item::Item;
 
@@ -17,6 +19,10 @@ pub struct App {
     pub selected: usize,
     pub status: String,
     pub should_quit: bool,
+    /// Stable ids marked done since the last fetch result was applied. A
+    /// fetch in flight at mark time was built before the mark and would
+    /// briefly resurface the item; these ids suppress that one result.
+    pending_done: HashSet<String>,
 }
 
 impl App {
@@ -33,6 +39,7 @@ impl App {
             selected: 0,
             status: "loading...".into(),
             should_quit: false,
+            pending_done: HashSet::new(),
         }
     }
 
@@ -60,7 +67,16 @@ impl App {
         let mut first_error = None;
         for (slot, result) in self.sections.iter_mut().zip(results) {
             match result {
-                Ok(data) => *slot = data,
+                Ok(mut data) => {
+                    // Drop items marked done after this fetch started; later
+                    // fetches consult the store, so this is one-shot (cleared
+                    // below) and cannot block a legitimate resurface.
+                    if !self.pending_done.is_empty() {
+                        data.items
+                            .retain(|item| !self.pending_done.contains(&item.stable_id()));
+                    }
+                    *slot = data;
+                }
                 Err(e) => {
                     if first_error.is_none() {
                         first_error = Some(e);
@@ -68,6 +84,7 @@ impl App {
                 }
             }
         }
+        self.pending_done.clear();
         self.clamp_selected();
         first_error
     }
@@ -110,11 +127,18 @@ impl App {
         })
     }
 
+    /// Removes the selected (just-marked-done) item from every section —
+    /// done is global, so a PR matching several sections' queries must
+    /// disappear everywhere — and suppresses it in the next fetch result in
+    /// case one was already in flight when the mark happened.
     pub fn remove_selected(&mut self) {
-        let idx = self.active;
-        if self.selected < self.sections[idx].items.len() {
-            self.sections[idx].items.remove(self.selected);
+        let Some(id) = self.selected_item().map(Item::stable_id) else {
+            return;
+        };
+        for section in &mut self.sections {
+            section.items.retain(|item| item.stable_id() != id);
         }
+        self.pending_done.insert(id);
         self.clamp_selected();
     }
 }
@@ -243,6 +267,54 @@ mod tests {
             }),
         ]);
         assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn remove_selected_removes_same_item_from_all_sections() {
+        // the same PR can match several sections' queries; done is global,
+        // so it must disappear everywhere, not linger until the next poll
+        let mut app = app3();
+        app.sections[2].items = vec![pr_item(3), pr_item(4)];
+        app.active = 1; // section B holds pr_item(3)
+        app.remove_selected();
+        assert!(app.sections[1].items.is_empty());
+        let remaining: Vec<u64> = app.sections[2].items.iter().map(|i| i.pr_number).collect();
+        assert_eq!(remaining, vec![4]); // 3 removed here too, 4 untouched
+    }
+
+    #[test]
+    fn apply_results_drops_items_done_since_fetch_started() {
+        let mut app = app3();
+        app.remove_selected(); // marks comment 7 done locally
+        // a fetch that was already in flight was built before the mark and
+        // still carries comment 7 — it must not flash back
+        let results = |ids: Vec<i64>| {
+            vec![
+                Ok(SectionData {
+                    title: "A".into(),
+                    items: ids.into_iter().map(comment_item).collect(),
+                }),
+                Ok(SectionData {
+                    title: "B".into(),
+                    items: vec![],
+                }),
+                Ok(SectionData {
+                    title: "C".into(),
+                    items: vec![],
+                }),
+            ]
+        };
+        app.apply_results(results(vec![7, 9]));
+        let ids: Vec<i64> = app.sections[0]
+            .items
+            .iter()
+            .map(|i| i.comment.as_ref().unwrap().id)
+            .collect();
+        assert_eq!(ids, vec![9]);
+        // suppression is one-shot: later fetches consult the store, so a
+        // legitimately resurfaced item must show again
+        app.apply_results(results(vec![7]));
+        assert_eq!(app.sections[0].items.len(), 1);
     }
 
     #[test]
