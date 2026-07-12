@@ -1,11 +1,13 @@
 mod app;
 mod ui;
 
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use crossterm::event::{Event, KeyCode, KeyEventKind};
-use ghbox_core::config::{Config, KeySpec};
-use ghbox_core::github::{self, Fetched};
-use ghbox_core::inbox::build_sections;
+use ghbox_core::config::{Config, KeySpec, Section};
+use ghbox_core::github;
+use ghbox_core::inbox::{SectionResult, build_sections};
 use ghbox_core::store::{KIND_MERGE_COMMENT, Store};
 use tokio::sync::mpsc;
 
@@ -13,8 +15,42 @@ use crate::app::{App, DoneEntry};
 
 enum Msg {
     Key(crossterm::event::KeyEvent),
-    Fetched(Box<ghbox_core::Result<Fetched>>),
+    Sections(Box<ghbox_core::Result<Vec<SectionResult>>>),
     Redraw,
+}
+
+/// Fetch + filter off the event loop: command filters can block up to 10s
+/// per section and must not freeze input handling. Opens its own Store —
+/// SQLite handles a second connection to the same DB fine, and reads see
+/// the main loop's committed done-marks.
+async fn fetch_and_build(
+    token: &str,
+    sections: &[Section],
+    db_path: &Path,
+) -> ghbox_core::Result<Vec<SectionResult>> {
+    let fetched = github::fetch_sections(token, sections).await?;
+    let store = Store::open(db_path)?;
+    build_sections(sections, &fetched, &store).await
+}
+
+/// `build_sections` holds `&Store` across the command-filter `.await`, and
+/// `Store` (a `rusqlite::Connection`) is `!Sync`, so the future is `!Send`
+/// and cannot be handed to `tokio::spawn` directly. Drive it to completion
+/// on a `spawn_blocking` thread instead, via `Handle::block_on` — the
+/// future never needs to move across threads once it starts, only the
+/// plain-data inputs and the result do.
+fn spawn_fetch(
+    tx: &mpsc::UnboundedSender<Msg>,
+    token: String,
+    sections: Vec<Section>,
+    db_path: std::path::PathBuf,
+) {
+    let tx = tx.clone();
+    let handle = tokio::runtime::Handle::current();
+    tokio::task::spawn_blocking(move || {
+        let result = handle.block_on(fetch_and_build(&token, &sections, &db_path));
+        let _ = tx.send(Msg::Sections(Box::new(result)));
+    });
 }
 
 #[tokio::main]
@@ -63,15 +99,21 @@ async fn run(
     let fetch_tx = tx.clone();
     let fetch_token = token.clone();
     let fetch_sections_cfg = config.sections.clone();
+    let fetch_db_path = config.db_path.clone();
     let interval_secs = config.poll_interval_secs.max(30);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
         loop {
             interval.tick().await;
-            let result = github::fetch_sections(&fetch_token, &fetch_sections_cfg).await;
-            if fetch_tx.send(Msg::Fetched(Box::new(result))).is_err() {
+            if fetch_tx.is_closed() {
                 break;
             }
+            spawn_fetch(
+                &fetch_tx,
+                fetch_token.clone(),
+                fetch_sections_cfg.clone(),
+                fetch_db_path.clone(),
+            );
         }
     });
 
@@ -82,13 +124,10 @@ async fn run(
     while let Some(msg) = rx.recv().await {
         match msg {
             Msg::Key(key) => handle_key(key.code, &mut app, &config, &store, &tx, &token),
-            Msg::Fetched(result) => match *result {
-                Ok(fetched) => match build_sections(&config.sections, &fetched, &store).await {
-                    Ok(results) => match app.apply_results(results) {
-                        Some(e) => app.status = format!("filter error: {e}"),
-                        None => app.status = format!("updated {}", now_hms()),
-                    },
-                    Err(e) => app.status = format!("error: {e}"),
+            Msg::Sections(result) => match *result {
+                Ok(results) => match app.apply_results(results) {
+                    Some(e) => app.status = format!("filter error: {e}"),
+                    None => app.status = format!("updated {}", now_hms()),
                 },
                 Err(e) => app.status = format!("fetch error: {e}"),
             },
@@ -171,13 +210,12 @@ fn handle_key(
         }
     } else if key_matches(kb.refresh, code) {
         app.status = "refreshing...".into();
-        let tx = tx.clone();
-        let token = token.to_string();
-        let sections = config.sections.clone();
-        tokio::spawn(async move {
-            let result = github::fetch_sections(&token, &sections).await;
-            let _ = tx.send(Msg::Fetched(Box::new(result)));
-        });
+        spawn_fetch(
+            tx,
+            token.to_string(),
+            config.sections.clone(),
+            config.db_path.clone(),
+        );
     } else if code == KeyCode::Down {
         app.next();
     } else if code == KeyCode::Up {
