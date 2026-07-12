@@ -23,14 +23,16 @@ ghbox
 
 | キー | 動作 |
 |---|---|
-| j / k | 上下移動 |
-| Tab | セクション切替 |
-| Enter | ブラウザでPRを開く |
+| ↓ / j | 下移動 |
+| ↑ / k | 上移動 |
+| → / l | 次セクション |
+| ← / h | 前セクション |
+| o | ブラウザでPRを開く |
 | d | 対応済みマーク |
 | r | 手動リフレッシュ |
 | q | 終了 |
 
-キーは `[keybindings]` でリマップできる(矢印キーの上下移動は常時有効)。
+キーは `[keybindings]` でリマップできる(1アクションに複数キーを配列で割り当て可)。
 
 ## Config
 
@@ -62,9 +64,10 @@ filter = { type = "command", command = "jq -r 'select(.pr_author != \"nogu3\") |
 tab_active = "yellow"
 selection_bg = "blue"
 
-[keybindings]                       # 省略キーはデフォルト。1文字 or tab/backtab/enter/up/down/esc
+[keybindings]                       # 省略キーはデフォルト。値は1文字/tab/backtab/enter/up/down/left/right/esc、または配列
 quit = "q"
 done = "d"
+next_section = ["right", "l"]       # 配列で複数キー割り当て
 ```
 
 ## Development
