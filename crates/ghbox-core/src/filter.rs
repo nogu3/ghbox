@@ -93,11 +93,18 @@ async fn run_command_filter_with_timeout(
 
     let mut stdin = child.stdin.take().expect("stdin is piped");
     let output = tokio::time::timeout(timeout, async {
-        // The child may exit without reading all input (e.g. `head`);
-        // a broken pipe here is not an error.
-        let _ = stdin.write_all(input.as_bytes()).await;
-        drop(stdin);
-        child.wait_with_output().await
+        // Write stdin and read stdout concurrently: if the child produces
+        // more output than the pipe buffer holds before it finishes reading
+        // stdin, sequential write-then-read would deadlock (child blocks on
+        // a full stdout pipe, we block on the stdin write).
+        let write = async {
+            // The child may exit without reading all input (e.g. `head`);
+            // a broken pipe here is not an error.
+            let _ = stdin.write_all(input.as_bytes()).await;
+            drop(stdin);
+        };
+        let (_, output) = tokio::join!(write, child.wait_with_output());
+        output
     })
     .await
     .map_err(|_| {
@@ -263,5 +270,25 @@ mod tests {
             .unwrap();
         assert_eq!(keep.len(), 1);
         assert!(keep.contains("pr:o/r#1"));
+    }
+
+    #[tokio::test]
+    async fn command_filter_handles_output_larger_than_pipe_buffer() {
+        // `cat` echoes every input line back; with >64KB of input the child's
+        // stdout pipe fills while stdin is still being written, which
+        // deadlocked the old sequential write-then-read implementation.
+        let items: Vec<Item> = (0..200)
+            .map(|i| {
+                let mut item = pr_item("o/r", i);
+                item.pr_title = "x".repeat(1024);
+                item
+            })
+            .collect();
+        let keep = run_command_filter_with_timeout("cat", &items, Duration::from_secs(2))
+            .await
+            .unwrap();
+        // stdout lines are the JSON item lines themselves — they simply
+        // match nothing as ids, but the call must succeed without timing out
+        assert_eq!(keep.len(), 200);
     }
 }
