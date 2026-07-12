@@ -8,6 +8,5 @@ pub mod github;
 pub mod inbox;
 pub mod item;
 pub mod store;
-pub mod types;
 
 pub use error::{Error, Result};

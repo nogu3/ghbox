@@ -5,7 +5,6 @@ use rusqlite::Connection;
 use crate::Result;
 
 pub const KIND_MERGE_COMMENT: &str = "merge_comment";
-pub const KIND_REVIEW_REQUEST: &str = "review_request";
 pub const KIND_PR: &str = "pr";
 
 /// Append-only migration list. NEVER edit an existing entry — the DB lives
@@ -129,15 +128,15 @@ mod tests {
         store.mark_done(KIND_MERGE_COMMENT, "123").unwrap();
         assert!(store.is_done(KIND_MERGE_COMMENT, "123").unwrap());
         // different kind, same key: independent
-        assert!(!store.is_done(KIND_REVIEW_REQUEST, "123").unwrap());
+        assert!(!store.is_done("review_request", "123").unwrap());
     }
 
     #[test]
     fn mark_done_is_idempotent() {
         let store = Store::open_in_memory().unwrap();
-        store.mark_done(KIND_REVIEW_REQUEST, "o/r#1").unwrap();
-        store.mark_done(KIND_REVIEW_REQUEST, "o/r#1").unwrap();
-        assert!(store.is_done(KIND_REVIEW_REQUEST, "o/r#1").unwrap());
+        store.mark_done("review_request", "o/r#1").unwrap();
+        store.mark_done("review_request", "o/r#1").unwrap();
+        assert!(store.is_done("review_request", "o/r#1").unwrap());
     }
 
     #[test]
