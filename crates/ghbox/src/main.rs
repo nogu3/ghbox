@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use crossterm::event::{Event, KeyCode, KeyEventKind};
-use ghbox_core::config::{Config, KeySpec, Section};
+use ghbox_core::config::{Config, KeyBinding, KeySpec, Section};
 use ghbox_core::github;
 use ghbox_core::inbox::{SectionResult, build_sections};
 use ghbox_core::store::{KIND_MERGE_COMMENT, Store};
@@ -184,6 +184,10 @@ fn key_matches(spec: KeySpec, code: KeyCode) -> bool {
     }
 }
 
+fn binding_matches(binding: &KeyBinding, code: KeyCode) -> bool {
+    binding.0.iter().any(|spec| key_matches(*spec, code))
+}
+
 fn handle_key(
     code: KeyCode,
     app: &mut App,
@@ -194,25 +198,23 @@ fn handle_key(
     token: &str,
 ) {
     let kb = &config.keybindings;
-    // Configured bindings take precedence; the arrow-key arms at the end are
-    // an always-on fallback for row movement (independent of keybindings).
-    if key_matches(kb.quit, code) {
+    if binding_matches(&kb.quit, code) {
         app.should_quit = true;
-    } else if key_matches(kb.down, code) {
+    } else if binding_matches(&kb.down, code) {
         app.next();
-    } else if key_matches(kb.up, code) {
+    } else if binding_matches(&kb.up, code) {
         app.prev();
-    } else if key_matches(kb.next_section, code) {
+    } else if binding_matches(&kb.next_section, code) {
         app.next_section();
-    } else if key_matches(kb.prev_section, code) {
+    } else if binding_matches(&kb.prev_section, code) {
         app.prev_section();
-    } else if key_matches(kb.open, code) {
+    } else if binding_matches(&kb.open, code) {
         if let Some(url) = app.selected_url()
             && let Err(e) = open::that_detached(url)
         {
             app.status = format!("failed to open browser: {e}");
         }
-    } else if key_matches(kb.done, code) {
+    } else if binding_matches(&kb.done, code) {
         let Some(entry) = app.selected_done_entry() else {
             return;
         };
@@ -230,7 +232,7 @@ fn handle_key(
             }
             Err(e) => app.status = format!("db error: {e}"),
         }
-    } else if key_matches(kb.refresh, code) {
+    } else if binding_matches(&kb.refresh, code) {
         let spawned = spawn_fetch(
             tx,
             fetching,
@@ -243,9 +245,5 @@ fn handle_key(
         } else {
             "fetch already in progress".into()
         };
-    } else if code == KeyCode::Down {
-        app.next();
-    } else if code == KeyCode::Up {
-        app.prev();
     }
 }

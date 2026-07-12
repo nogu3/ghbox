@@ -271,30 +271,82 @@ impl<'de> serde::Deserialize<'de> for KeySpec {
     }
 }
 
+/// One config action's keys. Accepts a single key string or a non-empty
+/// array of key strings, so `open = "o"` and `down = ["down", "j"]` both work.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyBinding(pub Vec<KeySpec>);
+
+impl<'de> serde::Deserialize<'de> for KeyBinding {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = KeyBinding;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a key string or a non-empty array of key strings")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, s: &str) -> std::result::Result<KeyBinding, E> {
+                let spec = s.parse::<KeySpec>().map_err(E::custom)?;
+                Ok(KeyBinding(vec![spec]))
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> std::result::Result<KeyBinding, A::Error> {
+                let mut keys = Vec::new();
+                while let Some(s) = seq.next_element::<String>()? {
+                    keys.push(s.parse::<KeySpec>().map_err(serde::de::Error::custom)?);
+                }
+                if keys.is_empty() {
+                    return Err(serde::de::Error::custom(
+                        "keybinding must have at least one key",
+                    ));
+                }
+                Ok(KeyBinding(keys))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+impl std::fmt::Display for KeyBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, spec) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, "/")?;
+            }
+            write!(f, "{spec}")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Keybindings {
-    pub up: KeySpec,
-    pub down: KeySpec,
-    pub next_section: KeySpec,
-    pub prev_section: KeySpec,
-    pub open: KeySpec,
-    pub done: KeySpec,
-    pub refresh: KeySpec,
-    pub quit: KeySpec,
+    pub up: KeyBinding,
+    pub down: KeyBinding,
+    pub next_section: KeyBinding,
+    pub prev_section: KeyBinding,
+    pub open: KeyBinding,
+    pub done: KeyBinding,
+    pub refresh: KeyBinding,
+    pub quit: KeyBinding,
 }
 
 impl Default for Keybindings {
     fn default() -> Self {
         Self {
-            up: KeySpec::Char('k'),
-            down: KeySpec::Char('j'),
-            next_section: KeySpec::Tab,
-            prev_section: KeySpec::BackTab,
-            open: KeySpec::Enter,
-            done: KeySpec::Char('d'),
-            refresh: KeySpec::Char('r'),
-            quit: KeySpec::Char('q'),
+            up: KeyBinding(vec![KeySpec::Up, KeySpec::Char('k')]),
+            down: KeyBinding(vec![KeySpec::Down, KeySpec::Char('j')]),
+            next_section: KeyBinding(vec![KeySpec::Right, KeySpec::Char('l')]),
+            prev_section: KeyBinding(vec![KeySpec::Left, KeySpec::Char('h')]),
+            open: KeyBinding(vec![KeySpec::Char('o')]),
+            done: KeyBinding(vec![KeySpec::Char('d')]),
+            refresh: KeyBinding(vec![KeySpec::Char('r')]),
+            quit: KeyBinding(vec![KeySpec::Char('q')]),
         }
     }
 }
@@ -393,21 +445,23 @@ impl Config {
         }
         let kb = &self.keybindings;
         let bindings = [
-            ("up", kb.up),
-            ("down", kb.down),
-            ("next_section", kb.next_section),
-            ("prev_section", kb.prev_section),
-            ("open", kb.open),
-            ("done", kb.done),
-            ("refresh", kb.refresh),
-            ("quit", kb.quit),
+            ("up", &kb.up),
+            ("down", &kb.down),
+            ("next_section", &kb.next_section),
+            ("prev_section", &kb.prev_section),
+            ("open", &kb.open),
+            ("done", &kb.done),
+            ("refresh", &kb.refresh),
+            ("quit", &kb.quit),
         ];
-        for (i, (name_a, key_a)) in bindings.iter().enumerate() {
-            for (name_b, key_b) in &bindings[i + 1..] {
-                if key_a == key_b {
-                    return Err(Error::Config(format!(
-                        "keybindings: {name_a} and {name_b} are both bound to \"{key_a}\""
-                    )));
+        for (i, (name_a, binding_a)) in bindings.iter().enumerate() {
+            for (name_b, binding_b) in &bindings[i + 1..] {
+                for key in &binding_a.0 {
+                    if binding_b.0.contains(key) {
+                        return Err(Error::Config(format!(
+                            "keybindings: {name_a} and {name_b} are both bound to \"{key}\""
+                        )));
+                    }
                 }
             }
         }
@@ -564,15 +618,51 @@ filter = { type = "command", command = "jq -r .id" }
     #[test]
     fn keybindings_defaults_and_partial_override() {
         let cfg = parse("[keybindings]\nquit = \"x\"\n").unwrap();
-        assert_eq!(cfg.keybindings.quit, KeySpec::Char('x'));
-        assert_eq!(cfg.keybindings.next_section, KeySpec::Tab);
+        assert_eq!(cfg.keybindings.quit, KeyBinding(vec![KeySpec::Char('x')]));
+        assert_eq!(
+            cfg.keybindings.next_section,
+            KeyBinding(vec![KeySpec::Right, KeySpec::Char('l')])
+        );
     }
 
     #[test]
     fn special_key_names_parse() {
         let cfg = parse("[keybindings]\nquit = \"esc\"\nopen = \"o\"\n").unwrap();
-        assert_eq!(cfg.keybindings.quit, KeySpec::Esc);
-        assert_eq!(cfg.keybindings.open, KeySpec::Char('o'));
+        assert_eq!(cfg.keybindings.quit, KeyBinding(vec![KeySpec::Esc]));
+        assert_eq!(cfg.keybindings.open, KeyBinding(vec![KeySpec::Char('o')]));
+    }
+
+    #[test]
+    fn keybinding_accepts_string_and_array() {
+        let cfg = parse("[keybindings]\ndown = [\"down\", \"j\"]\nopen = \"o\"\n").unwrap();
+        assert_eq!(
+            cfg.keybindings.down,
+            KeyBinding(vec![KeySpec::Down, KeySpec::Char('j')])
+        );
+        assert_eq!(cfg.keybindings.open, KeyBinding(vec![KeySpec::Char('o')]));
+    }
+
+    #[test]
+    fn keybinding_empty_array_is_error() {
+        assert!(parse("[keybindings]\nquit = []\n").is_err());
+    }
+
+    #[test]
+    fn keybinding_defaults_are_arrow_first_with_vim() {
+        let cfg = parse("").unwrap();
+        assert_eq!(
+            cfg.keybindings.next_section,
+            KeyBinding(vec![KeySpec::Right, KeySpec::Char('l')])
+        );
+        assert_eq!(
+            cfg.keybindings.prev_section,
+            KeyBinding(vec![KeySpec::Left, KeySpec::Char('h')])
+        );
+        assert_eq!(
+            cfg.keybindings.down,
+            KeyBinding(vec![KeySpec::Down, KeySpec::Char('j')])
+        );
+        assert_eq!(cfg.keybindings.open, KeyBinding(vec![KeySpec::Char('o')]));
     }
 
     #[test]
@@ -597,8 +687,14 @@ filter = { type = "command", command = "jq -r .id" }
     fn left_right_keys_parse() {
         let cfg =
             parse("[keybindings]\nnext_section = \"right\"\nprev_section = \"left\"\n").unwrap();
-        assert_eq!(cfg.keybindings.next_section, KeySpec::Right);
-        assert_eq!(cfg.keybindings.prev_section, KeySpec::Left);
+        assert_eq!(
+            cfg.keybindings.next_section,
+            KeyBinding(vec![KeySpec::Right])
+        );
+        assert_eq!(
+            cfg.keybindings.prev_section,
+            KeyBinding(vec![KeySpec::Left])
+        );
         assert_eq!(KeySpec::Left.to_string(), "left");
         assert_eq!(KeySpec::Right.to_string(), "right");
     }
