@@ -217,6 +217,8 @@ pub enum KeySpec {
     Enter,
     Up,
     Down,
+    Left,
+    Right,
     Esc,
 }
 
@@ -230,13 +232,15 @@ impl std::str::FromStr for KeySpec {
             "enter" => Ok(KeySpec::Enter),
             "up" => Ok(KeySpec::Up),
             "down" => Ok(KeySpec::Down),
+            "left" => Ok(KeySpec::Left),
+            "right" => Ok(KeySpec::Right),
             "esc" => Ok(KeySpec::Esc),
             _ => {
                 let mut chars = s.chars();
                 match (chars.next(), chars.next()) {
                     (Some(c), None) => Ok(KeySpec::Char(c)),
                     _ => Err(format!(
-                        "invalid key {s:?}: expected one character or tab/backtab/enter/up/down/esc"
+                        "invalid key {s:?}: expected one character or tab/backtab/enter/up/down/left/right/esc"
                     )),
                 }
             }
@@ -253,6 +257,8 @@ impl std::fmt::Display for KeySpec {
             KeySpec::Enter => write!(f, "enter"),
             KeySpec::Up => write!(f, "up"),
             KeySpec::Down => write!(f, "down"),
+            KeySpec::Left => write!(f, "left"),
+            KeySpec::Right => write!(f, "right"),
             KeySpec::Esc => write!(f, "esc"),
         }
     }
@@ -585,5 +591,15 @@ filter = { type = "command", command = "jq -r .id" }
     fn key_spec_display_roundtrip() {
         assert_eq!(KeySpec::Char('k').to_string(), "k");
         assert_eq!(KeySpec::BackTab.to_string(), "backtab");
+    }
+
+    #[test]
+    fn left_right_keys_parse() {
+        let cfg =
+            parse("[keybindings]\nnext_section = \"right\"\nprev_section = \"left\"\n").unwrap();
+        assert_eq!(cfg.keybindings.next_section, KeySpec::Right);
+        assert_eq!(cfg.keybindings.prev_section, KeySpec::Left);
+        assert_eq!(KeySpec::Left.to_string(), "left");
+        assert_eq!(KeySpec::Right.to_string(), "right");
     }
 }

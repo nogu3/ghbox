@@ -178,6 +178,8 @@ fn key_matches(spec: KeySpec, code: KeyCode) -> bool {
         KeySpec::Enter => code == KeyCode::Enter,
         KeySpec::Up => code == KeyCode::Up,
         KeySpec::Down => code == KeyCode::Down,
+        KeySpec::Left => code == KeyCode::Left,
+        KeySpec::Right => code == KeyCode::Right,
         KeySpec::Esc => code == KeyCode::Esc,
     }
 }
