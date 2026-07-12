@@ -6,6 +6,8 @@ pub enum Error {
     Token(String),
     #[error("config error: {0}")]
     Config(String),
+    #[error("db schema error: {0}")]
+    Schema(String),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
