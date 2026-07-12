@@ -10,6 +10,8 @@ pub struct Config {
     pub poll_interval_secs: u64,
     pub db_path: PathBuf,
     pub sections: Vec<Section>,
+    pub theme: Theme,
+    pub keybindings: Keybindings,
 }
 
 impl Default for Config {
@@ -18,6 +20,8 @@ impl Default for Config {
             poll_interval_secs: 300,
             db_path: default_db_path(),
             sections: default_sections(),
+            theme: Theme::default(),
+            keybindings: Keybindings::default(),
         }
     }
 }
@@ -101,6 +105,190 @@ impl TryFrom<FilterSpec> for SectionFilter {
             other => Err(format!(
                 "unknown filter type {other:?} (expected \"none\", \"comment-mention\", or \"command\")"
             )),
+        }
+    }
+}
+
+/// ratatui named color (lowercase in config) or "#rrggbb".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeColor {
+    Named(NamedColor),
+    Rgb(u8, u8, u8),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamedColor {
+    Black,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+    Gray,
+    DarkGray,
+    LightRed,
+    LightGreen,
+    LightYellow,
+    LightBlue,
+    LightMagenta,
+    LightCyan,
+    White,
+}
+
+impl std::str::FromStr for ThemeColor {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, String> {
+        if let Some(hex) = s.strip_prefix('#') {
+            if hex.len() == 6 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                let r = u8::from_str_radix(&hex[0..2], 16).expect("checked hex");
+                let g = u8::from_str_radix(&hex[2..4], 16).expect("checked hex");
+                let b = u8::from_str_radix(&hex[4..6], 16).expect("checked hex");
+                return Ok(ThemeColor::Rgb(r, g, b));
+            }
+            return Err(format!("invalid color {s:?}: expected #rrggbb"));
+        }
+        use NamedColor::*;
+        let named = match s {
+            "black" => Black,
+            "red" => Red,
+            "green" => Green,
+            "yellow" => Yellow,
+            "blue" => Blue,
+            "magenta" => Magenta,
+            "cyan" => Cyan,
+            "gray" => Gray,
+            "darkgray" => DarkGray,
+            "lightred" => LightRed,
+            "lightgreen" => LightGreen,
+            "lightyellow" => LightYellow,
+            "lightblue" => LightBlue,
+            "lightmagenta" => LightMagenta,
+            "lightcyan" => LightCyan,
+            "white" => White,
+            _ => return Err(format!("unknown color {s:?}")),
+        };
+        Ok(ThemeColor::Named(named))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ThemeColor {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Theme {
+    pub tab_active: ThemeColor,
+    pub tab_inactive: ThemeColor,
+    pub border: ThemeColor,
+    pub selection_bg: ThemeColor,
+    pub selection_fg: ThemeColor,
+    pub table_header: ThemeColor,
+    pub status_bar: ThemeColor,
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        use NamedColor::*;
+        Self {
+            tab_active: ThemeColor::Named(Yellow),
+            tab_inactive: ThemeColor::Named(DarkGray),
+            border: ThemeColor::Named(DarkGray),
+            selection_bg: ThemeColor::Named(Blue),
+            selection_fg: ThemeColor::Named(White),
+            table_header: ThemeColor::Named(Cyan),
+            status_bar: ThemeColor::Named(DarkGray),
+        }
+    }
+}
+
+/// A key a config action can be bound to: a single character or a named
+/// special key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeySpec {
+    Char(char),
+    Tab,
+    BackTab,
+    Enter,
+    Up,
+    Down,
+    Esc,
+}
+
+impl std::str::FromStr for KeySpec {
+    type Err = String;
+
+    fn from_str(s: &str) -> std::result::Result<Self, String> {
+        match s {
+            "tab" => Ok(KeySpec::Tab),
+            "backtab" => Ok(KeySpec::BackTab),
+            "enter" => Ok(KeySpec::Enter),
+            "up" => Ok(KeySpec::Up),
+            "down" => Ok(KeySpec::Down),
+            "esc" => Ok(KeySpec::Esc),
+            _ => {
+                let mut chars = s.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(c), None) => Ok(KeySpec::Char(c)),
+                    _ => Err(format!(
+                        "invalid key {s:?}: expected one character or tab/backtab/enter/up/down/esc"
+                    )),
+                }
+            }
+        }
+    }
+}
+
+impl std::fmt::Display for KeySpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KeySpec::Char(c) => write!(f, "{c}"),
+            KeySpec::Tab => write!(f, "tab"),
+            KeySpec::BackTab => write!(f, "backtab"),
+            KeySpec::Enter => write!(f, "enter"),
+            KeySpec::Up => write!(f, "up"),
+            KeySpec::Down => write!(f, "down"),
+            KeySpec::Esc => write!(f, "esc"),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for KeySpec {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Keybindings {
+    pub up: KeySpec,
+    pub down: KeySpec,
+    pub next_section: KeySpec,
+    pub prev_section: KeySpec,
+    pub open: KeySpec,
+    pub done: KeySpec,
+    pub refresh: KeySpec,
+    pub quit: KeySpec,
+}
+
+impl Default for Keybindings {
+    fn default() -> Self {
+        Self {
+            up: KeySpec::Char('k'),
+            down: KeySpec::Char('j'),
+            next_section: KeySpec::Tab,
+            prev_section: KeySpec::BackTab,
+            open: KeySpec::Enter,
+            done: KeySpec::Char('d'),
+            refresh: KeySpec::Char('r'),
+            quit: KeySpec::Char('q'),
         }
     }
 }
@@ -194,6 +382,26 @@ impl Config {
                             section.title
                         ))
                     })?;
+                }
+            }
+        }
+        let kb = &self.keybindings;
+        let bindings = [
+            ("up", kb.up),
+            ("down", kb.down),
+            ("next_section", kb.next_section),
+            ("prev_section", kb.prev_section),
+            ("open", kb.open),
+            ("done", kb.done),
+            ("refresh", kb.refresh),
+            ("quit", kb.quit),
+        ];
+        for (i, (name_a, key_a)) in bindings.iter().enumerate() {
+            for (name_b, key_b) in &bindings[i + 1..] {
+                if key_a == key_b {
+                    return Err(Error::Config(format!(
+                        "keybindings: {name_a} and {name_b} are both bound to \"{key_a}\""
+                    )));
                 }
             }
         }
@@ -325,5 +533,57 @@ filter = { type = "command", command = "jq -r .id" }
     #[test]
     fn unknown_key_is_error() {
         assert!(parse("typo_key = 1\n").is_err());
+    }
+
+    #[test]
+    fn theme_defaults_and_partial_override() {
+        let cfg = parse("[theme]\ntab_active = \"red\"\n").unwrap();
+        assert_eq!(cfg.theme.tab_active, ThemeColor::Named(NamedColor::Red));
+        // omitted keys keep defaults
+        assert_eq!(cfg.theme.selection_bg, ThemeColor::Named(NamedColor::Blue));
+    }
+
+    #[test]
+    fn hex_color_parses() {
+        let cfg = parse("[theme]\nborder = \"#1a2B3c\"\n").unwrap();
+        assert_eq!(cfg.theme.border, ThemeColor::Rgb(0x1a, 0x2b, 0x3c));
+    }
+
+    #[test]
+    fn invalid_color_is_error() {
+        assert!(parse("[theme]\nborder = \"mauve\"\n").is_err());
+        assert!(parse("[theme]\nborder = \"#12345\"\n").is_err());
+    }
+
+    #[test]
+    fn keybindings_defaults_and_partial_override() {
+        let cfg = parse("[keybindings]\nquit = \"x\"\n").unwrap();
+        assert_eq!(cfg.keybindings.quit, KeySpec::Char('x'));
+        assert_eq!(cfg.keybindings.next_section, KeySpec::Tab);
+    }
+
+    #[test]
+    fn special_key_names_parse() {
+        let cfg = parse("[keybindings]\nquit = \"esc\"\nopen = \"o\"\n").unwrap();
+        assert_eq!(cfg.keybindings.quit, KeySpec::Esc);
+        assert_eq!(cfg.keybindings.open, KeySpec::Char('o'));
+    }
+
+    #[test]
+    fn invalid_key_name_is_error() {
+        assert!(parse("[keybindings]\nquit = \"ctrl-q\"\n").is_err());
+    }
+
+    #[test]
+    fn duplicate_keybinding_is_error() {
+        let err = parse("[keybindings]\nquit = \"j\"\n").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("down") && msg.contains("quit"), "got: {msg}");
+    }
+
+    #[test]
+    fn key_spec_display_roundtrip() {
+        assert_eq!(KeySpec::Char('k').to_string(), "k");
+        assert_eq!(KeySpec::BackTab.to_string(), "backtab");
     }
 }
