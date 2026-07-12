@@ -48,6 +48,17 @@ async fn fetch_and_build(
 /// `fetching` guards against overlapping fetches: a black-holed HTTP
 /// connection would otherwise pin one blocking-pool thread per poll tick.
 /// Returns `false` (no task spawned) if a fetch is already in flight.
+/// Clears the in-flight flag when the fetch task ends — including a panic,
+/// which would otherwise leave the flag stuck and silently disable refresh
+/// for the rest of the session.
+struct FetchingGuard(Arc<AtomicBool>);
+
+impl Drop for FetchingGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 fn spawn_fetch(
     tx: &mpsc::UnboundedSender<Msg>,
     fetching: &Arc<AtomicBool>,
@@ -59,12 +70,12 @@ fn spawn_fetch(
         return false;
     }
     let tx = tx.clone();
-    let fetching = Arc::clone(fetching);
+    let guard = FetchingGuard(Arc::clone(fetching));
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
+        let _guard = guard;
         let result = handle.block_on(fetch_and_build(&token, &sections, &db_path));
         let _ = tx.send(Msg::Sections(Box::new(result)));
-        fetching.store(false, Ordering::SeqCst);
     });
     true
 }
@@ -121,6 +132,9 @@ async fn run(
     let interval_secs = config.poll_interval_secs.max(30);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        // Default (Burst) would fire every tick missed during laptop sleep
+        // back-to-back on resume; Delay fetches once and reschedules.
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
             if fetch_tx.is_closed() {
@@ -208,7 +222,32 @@ fn binding_matches(binding: &KeyBinding, code: KeyCode) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::compose_status;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::{FetchingGuard, compose_status};
+
+    #[test]
+    fn fetching_guard_resets_flag_on_drop() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let guard = FetchingGuard(Arc::clone(&flag));
+        assert!(flag.load(Ordering::SeqCst));
+        drop(guard);
+        assert!(!flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn fetching_guard_resets_flag_on_panic() {
+        // a panicking fetch task must not leave the in-flight flag stuck,
+        // which would silently disable refresh for the rest of the session
+        let flag = Arc::new(AtomicBool::new(true));
+        let flag2 = Arc::clone(&flag);
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = FetchingGuard(flag2);
+            panic!("boom");
+        });
+        assert!(!flag.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn status_is_plain_update_when_no_errors() {
