@@ -20,8 +20,11 @@ pub struct CommentFilter {
 
 impl CommentFilter {
     pub fn new(viewer_login: &str, extra_patterns: &[String]) -> Result<Self> {
+        // Both sides need a boundary: GitHub only links @login at a word
+        // start (so bob@nogu3.example is not a mention) and never as a
+        // prefix of a longer login (@nogu3x, @nogu3-fork).
         let mention = Regex::new(&format!(
-            r"(?i)@{}(?:[^\w-]|$)",
+            r"(?i)(?:^|[^\w-])@{}(?:[^\w-]|$)",
             regex::escape(viewer_login)
         ))
         .map_err(|e| Error::Config(format!("bad viewer login: {e}")))?;
@@ -197,6 +200,19 @@ mod tests {
     fn rejects_mention_of_hyphenated_longer_login() {
         // @nogu3-fork is a different user; hyphen must not count as a boundary
         assert!(!filter().is_merge_request("@nogu3-fork please merge"));
+    }
+
+    #[test]
+    fn rejects_email_like_token() {
+        // bob@nogu3.example is an email-ish token, not a mention; GitHub only
+        // treats @login at a word start as a mention
+        assert!(!filter().is_merge_request("cc bob@nogu3.example about the merge"));
+    }
+
+    #[test]
+    fn matches_mention_after_punctuation() {
+        // "(" is a valid left boundary — only word chars / hyphen disqualify
+        assert!(filter().is_merge_request("merge please (@nogu3)"));
     }
 
     #[test]
