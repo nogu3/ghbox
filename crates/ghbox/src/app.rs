@@ -1,36 +1,47 @@
-use ghbox_core::inbox::Inbox;
-use ghbox_core::store::{KIND_MERGE_COMMENT, KIND_REVIEW_REQUEST};
+use ghbox_core::inbox::{SectionData, SectionResult};
+use ghbox_core::item::Item;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Section {
-    Merge,
-    Review,
+/// What pressing the done key should record for the selected item.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DoneEntry {
+    Comment(i64),
+    Pr { key: String, updated_at: String },
 }
 
 pub struct App {
-    pub inbox: Inbox,
-    pub section: Section,
+    /// One slot per config section, same order. Titles are filled at startup
+    /// so the tab bar renders before the first fetch completes.
+    /// Invariant: never empty (Config::validate rejects empty sections).
+    pub sections: Vec<SectionData>,
+    pub active: usize,
     pub selected: usize,
     pub status: String,
     pub should_quit: bool,
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(titles: Vec<String>) -> Self {
         Self {
-            inbox: Inbox::default(),
-            section: Section::Merge,
+            sections: titles
+                .into_iter()
+                .map(|title| SectionData {
+                    title,
+                    items: Vec::new(),
+                })
+                .collect(),
+            active: 0,
             selected: 0,
             status: "loading...".into(),
             should_quit: false,
         }
     }
 
+    pub fn active_section(&self) -> &SectionData {
+        &self.sections[self.active]
+    }
+
     pub fn items_len(&self) -> usize {
-        match self.section {
-            Section::Merge => self.inbox.merge_requests.len(),
-            Section::Review => self.inbox.review_requests.len(),
-        }
+        self.active_section().items.len()
     }
 
     fn clamp_selected(&mut self) {
@@ -42,9 +53,23 @@ impl App {
         }
     }
 
-    pub fn set_inbox(&mut self, inbox: Inbox) {
-        self.inbox = inbox;
+    /// Applies one fetch's per-section results. A section that failed (Err)
+    /// keeps its previous items; the first error message is returned for
+    /// the status bar.
+    pub fn apply_results(&mut self, results: Vec<SectionResult>) -> Option<String> {
+        let mut first_error = None;
+        for (slot, result) in self.sections.iter_mut().zip(results) {
+            match result {
+                Ok(data) => *slot = data,
+                Err(e) => {
+                    if first_error.is_none() {
+                        first_error = Some(e);
+                    }
+                }
+            }
+        }
         self.clamp_selected();
+        first_error
     }
 
     pub fn next(&mut self) {
@@ -57,56 +82,38 @@ impl App {
         self.selected = self.selected.saturating_sub(1);
     }
 
-    pub fn toggle_section(&mut self) {
-        self.section = match self.section {
-            Section::Merge => Section::Review,
-            Section::Review => Section::Merge,
-        };
+    pub fn next_section(&mut self) {
+        self.active = (self.active + 1) % self.sections.len();
         self.selected = 0;
     }
 
-    pub fn selected_url(&self) -> Option<&str> {
-        match self.section {
-            Section::Merge => self
-                .inbox
-                .merge_requests
-                .get(self.selected)
-                .map(|m| m.pr_url.as_str()),
-            Section::Review => self
-                .inbox
-                .review_requests
-                .get(self.selected)
-                .map(|r| r.pr_url.as_str()),
-        }
+    pub fn prev_section(&mut self) {
+        self.active = (self.active + self.sections.len() - 1) % self.sections.len();
+        self.selected = 0;
     }
 
-    pub fn selected_done_entry(&self) -> Option<(&'static str, String)> {
-        match self.section {
-            Section::Merge => self
-                .inbox
-                .merge_requests
-                .get(self.selected)
-                .map(|m| (KIND_MERGE_COMMENT, m.comment_id.to_string())),
-            Section::Review => self
-                .inbox
-                .review_requests
-                .get(self.selected)
-                .map(|r| (KIND_REVIEW_REQUEST, r.key())),
-        }
+    pub fn selected_item(&self) -> Option<&Item> {
+        self.active_section().items.get(self.selected)
+    }
+
+    pub fn selected_url(&self) -> Option<&str> {
+        self.selected_item().map(|i| i.pr_url.as_str())
+    }
+
+    pub fn selected_done_entry(&self) -> Option<DoneEntry> {
+        self.selected_item().map(|i| match &i.comment {
+            Some(c) => DoneEntry::Comment(c.id),
+            None => DoneEntry::Pr {
+                key: i.pr_key(),
+                updated_at: i.pr_updated_at.clone(),
+            },
+        })
     }
 
     pub fn remove_selected(&mut self) {
-        match self.section {
-            Section::Merge => {
-                if self.selected < self.inbox.merge_requests.len() {
-                    self.inbox.merge_requests.remove(self.selected);
-                }
-            }
-            Section::Review => {
-                if self.selected < self.inbox.review_requests.len() {
-                    self.inbox.review_requests.remove(self.selected);
-                }
-            }
+        let idx = self.active;
+        if self.selected < self.sections[idx].items.len() {
+            self.sections[idx].items.remove(self.selected);
         }
         self.clamp_selected();
     }
@@ -115,44 +122,44 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ghbox_core::types::{MergeRequest, ReviewRequest};
+    use ghbox_core::item::CommentInfo;
 
-    fn merge_item(id: i64) -> MergeRequest {
-        MergeRequest {
-            comment_id: id,
-            repo: "o/r".into(),
-            pr_number: 1,
-            pr_title: "t".into(),
-            pr_url: format!("https://example.com/{id}"),
-            author: "a".into(),
-            body: "b".into(),
-            created_at: "2026-01-01T00:00:00Z".into(),
-        }
-    }
-
-    fn review_item(number: u64) -> ReviewRequest {
-        ReviewRequest {
+    fn pr_item(number: u64) -> Item {
+        Item {
             repo: "o/r".into(),
             pr_number: number,
             pr_title: "t".into(),
             pr_url: format!("https://example.com/pr/{number}"),
-            author: "a".into(),
-            created_at: "2026-01-01T00:00:00Z".into(),
+            pr_author: "a".into(),
+            pr_updated_at: "2026-07-02T00:00:00Z".into(),
+            pr_created_at: "2026-07-01T00:00:00Z".into(),
+            comment: None,
         }
     }
 
-    fn app_with(merges: Vec<MergeRequest>, reviews: Vec<ReviewRequest>) -> App {
-        let mut app = App::new();
-        app.set_inbox(Inbox {
-            merge_requests: merges,
-            review_requests: reviews,
-        });
+    fn comment_item(id: i64) -> Item {
+        Item {
+            pr_url: format!("https://example.com/{id}"),
+            comment: Some(CommentInfo {
+                id,
+                author: "bob".into(),
+                body: "@nogu3 merge".into(),
+                created_at: "2026-07-03T00:00:00Z".into(),
+            }),
+            ..pr_item(1)
+        }
+    }
+
+    fn app3() -> App {
+        let mut app = App::new(vec!["A".into(), "B".into(), "C".into()]);
+        app.sections[0].items = vec![comment_item(7), comment_item(8)];
+        app.sections[1].items = vec![pr_item(3)];
         app
     }
 
     #[test]
     fn navigation_clamps_at_boundaries() {
-        let mut app = app_with(vec![merge_item(1), merge_item(2)], vec![]);
+        let mut app = app3();
         app.prev();
         assert_eq!(app.selected, 0);
         app.next();
@@ -162,60 +169,91 @@ mod tests {
     }
 
     #[test]
-    fn toggle_switches_section_and_resets_selection() {
-        let mut app = app_with(vec![merge_item(1), merge_item(2)], vec![review_item(1)]);
+    fn section_cycling_wraps_and_resets_selection() {
+        let mut app = app3();
         app.next();
-        app.toggle_section();
-        assert_eq!(app.section, Section::Review);
+        app.next_section();
+        assert_eq!(app.active, 1);
         assert_eq!(app.selected, 0);
-        app.toggle_section();
-        assert_eq!(app.section, Section::Merge);
+        app.next_section();
+        app.next_section();
+        assert_eq!(app.active, 0); // wrapped
+        app.prev_section();
+        assert_eq!(app.active, 2); // wrapped backwards
     }
 
     #[test]
-    fn selected_url_and_done_entry_follow_section() {
-        let mut app = app_with(vec![merge_item(7)], vec![review_item(3)]);
+    fn done_entry_follows_item_kind() {
+        let mut app = app3();
+        assert_eq!(app.selected_done_entry(), Some(DoneEntry::Comment(7)));
         assert_eq!(app.selected_url(), Some("https://example.com/7"));
+        app.next_section();
         assert_eq!(
             app.selected_done_entry(),
-            Some((ghbox_core::store::KIND_MERGE_COMMENT, "7".to_string()))
-        );
-        app.toggle_section();
-        assert_eq!(app.selected_url(), Some("https://example.com/pr/3"));
-        assert_eq!(
-            app.selected_done_entry(),
-            Some((ghbox_core::store::KIND_REVIEW_REQUEST, "o/r#3".to_string()))
+            Some(DoneEntry::Pr {
+                key: "o/r#3".into(),
+                updated_at: "2026-07-02T00:00:00Z".into()
+            })
         );
     }
 
     #[test]
     fn empty_section_yields_none() {
-        let app = app_with(vec![], vec![]);
+        let mut app = app3();
+        app.active = 2;
         assert_eq!(app.selected_url(), None);
         assert_eq!(app.selected_done_entry(), None);
     }
 
     #[test]
+    fn apply_results_replaces_ok_and_keeps_err_sections() {
+        let mut app = app3();
+        let err = app.apply_results(vec![
+            Ok(SectionData {
+                title: "A".into(),
+                items: vec![comment_item(9)],
+            }),
+            Err("B: command filter exited with 1".into()),
+            Ok(SectionData {
+                title: "C".into(),
+                items: vec![],
+            }),
+        ]);
+        assert_eq!(err.as_deref(), Some("B: command filter exited with 1"));
+        assert_eq!(app.sections[0].items.len(), 1); // replaced
+        assert_eq!(app.sections[1].items.len(), 1); // previous items kept
+    }
+
+    #[test]
+    fn apply_results_clamps_selection() {
+        let mut app = app3();
+        app.next(); // selected = 1
+        app.apply_results(vec![
+            Ok(SectionData {
+                title: "A".into(),
+                items: vec![comment_item(9)],
+            }),
+            Ok(SectionData {
+                title: "B".into(),
+                items: vec![],
+            }),
+            Ok(SectionData {
+                title: "C".into(),
+                items: vec![],
+            }),
+        ]);
+        assert_eq!(app.selected, 0);
+    }
+
+    #[test]
     fn remove_selected_clamps_selection() {
-        let mut app = app_with(vec![merge_item(1), merge_item(2)], vec![]);
-        app.next(); // select last
+        let mut app = app3();
+        app.next(); // select last of section 0
         app.remove_selected();
         assert_eq!(app.items_len(), 1);
         assert_eq!(app.selected, 0);
         app.remove_selected();
         assert_eq!(app.items_len(), 0);
-        assert_eq!(app.selected, 0);
-    }
-
-    #[test]
-    fn set_inbox_clamps_selection() {
-        let mut app = app_with(vec![merge_item(1), merge_item(2), merge_item(3)], vec![]);
-        app.next();
-        app.next(); // selected = 2
-        app.set_inbox(Inbox {
-            merge_requests: vec![merge_item(1)],
-            review_requests: vec![],
-        });
         assert_eq!(app.selected, 0);
     }
 }
