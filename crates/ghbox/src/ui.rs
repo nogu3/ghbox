@@ -1,4 +1,4 @@
-use ghbox_core::config::{Column, Config, Keybindings, NamedColor, Theme, ThemeColor};
+use ghbox_core::config::{Column, Config, KeySpec, Keybindings, NamedColor, Theme, ThemeColor};
 use ghbox_core::item::Item;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -161,10 +161,26 @@ fn draw_table(frame: &mut Frame, app: &App, config: &Config, area: Rect) {
     frame.render_stateful_widget(table, area, &mut state);
 }
 
+fn key_glyph(spec: KeySpec) -> String {
+    match spec {
+        KeySpec::Up => "↑".to_string(),
+        KeySpec::Down => "↓".to_string(),
+        KeySpec::Left => "←".to_string(),
+        KeySpec::Right => "→".to_string(),
+        other => other.to_string(),
+    }
+}
+
 fn help_line(kb: &Keybindings) -> String {
     format!(
         "{}/{}:移動  {}:切替  {}:開く  {}:対応済み  {}:更新  {}:終了",
-        kb.down, kb.up, kb.next_section, kb.open, kb.done, kb.refresh, kb.quit
+        key_glyph(kb.down.primary()),
+        key_glyph(kb.up.primary()),
+        key_glyph(kb.next_section.primary()),
+        key_glyph(kb.open.primary()),
+        key_glyph(kb.done.primary()),
+        key_glyph(kb.refresh.primary()),
+        key_glyph(kb.quit.primary()),
     )
 }
 
@@ -245,5 +261,14 @@ mod tests {
     fn fmt_ts_formats_iso8601() {
         assert_eq!(fmt_ts("2026-07-12T10:30:00Z"), "07-12 10:30");
         assert_eq!(fmt_ts("garbage"), "garbage");
+    }
+
+    #[test]
+    fn help_line_uses_primary_keys_with_arrow_glyphs() {
+        let kb = Keybindings::default();
+        assert_eq!(
+            help_line(&kb),
+            "↓/↑:移動  →:切替  o:開く  d:対応済み  r:更新  q:終了"
+        );
     }
 }
