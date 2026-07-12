@@ -87,7 +87,7 @@ async fn run_command_filter_with_timeout(
         .arg(command)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()?;
 
@@ -116,8 +116,15 @@ async fn run_command_filter_with_timeout(
     })??;
 
     if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        let detail = if stderr.is_empty() {
+            String::new()
+        } else {
+            format!("\n{}", stderr_tail(stderr))
+        };
         return Err(Error::Filter(format!(
-            "command filter exited with {}: {command}",
+            "command filter exited with {}: {command}{detail}",
             output.status
         )));
     }
@@ -128,6 +135,23 @@ async fn run_command_filter_with_timeout(
         .filter(|line| !line.is_empty())
         .map(str::to_string)
         .collect())
+}
+
+/// Keeps the tail of a filter's stderr so a chatty script can't flood the
+/// status bar. Bounds by both lines and bytes, splitting on a char boundary.
+fn stderr_tail(stderr: &str) -> String {
+    const MAX_LINES: usize = 5;
+    const MAX_BYTES: usize = 2000;
+    let lines: Vec<&str> = stderr.lines().collect();
+    let tail = lines[lines.len().saturating_sub(MAX_LINES)..].join("\n");
+    if tail.len() <= MAX_BYTES {
+        return tail;
+    }
+    let mut cut = tail.len() - MAX_BYTES;
+    while !tail.is_char_boundary(cut) {
+        cut += 1;
+    }
+    format!("…{}", &tail[cut..])
 }
 
 #[cfg(test)]
@@ -253,6 +277,35 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Filter(m) if m.contains("exited")));
+    }
+
+    #[test]
+    fn stderr_tail_keeps_only_the_last_lines() {
+        let long: String = (1..=20).map(|n| format!("line{n}\n")).collect();
+        let tail = stderr_tail(&long);
+        assert!(tail.contains("line20"));
+        assert!(tail.contains("line16"));
+        // earlier lines are dropped
+        assert!(!tail.contains("line15"));
+        assert!(!tail.contains("line1\n"));
+    }
+
+    #[tokio::test]
+    async fn command_filter_error_includes_stderr() {
+        // a failing filter script's diagnostics must reach the user, not be
+        // swallowed — otherwise "exited with 1" is undebuggable. The marker is
+        // base64-encoded so it appears only on the child's stderr, never in the
+        // command string the error already echoes.
+        let err = run_command_filter(
+            "echo Ym9vbToxMjMK | base64 -d >&2; exit 1",
+            &[pr_item("o/r", 1)],
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&err, Error::Filter(m) if m.contains("boom:123")),
+            "got: {err:?}"
+        );
     }
 
     #[tokio::test]
