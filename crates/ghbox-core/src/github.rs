@@ -87,8 +87,7 @@ pub struct PrData {
 /// Builds one GraphQL request covering every section: `viewer` plus one
 /// aliased `search` per section (s0, s1, ...). Search strings travel as
 /// variables to avoid escaping issues. Comment bodies are requested only
-/// for comment-mention sections. Verified 2026-07-11 with 2 searches:
-/// cost = 1 rate-limit point per call.
+/// for comment-mention sections.
 pub fn build_query(sections: &[Section]) -> (String, serde_json::Value) {
     let mut query = String::from("query(");
     for i in 0..sections.len() {
@@ -143,12 +142,26 @@ struct PrNode {
     comments: CommentConnection,
 }
 
-pub async fn fetch_sections(token: &str, sections: &[Section]) -> Result<Fetched> {
-    let (query, variables) = build_query(sections);
+/// The shared HTTP client: connection pooling across polls instead of a
+/// fresh TLS handshake per fetch. Building can only fail on TLS/resolver
+/// init, so a failure is surfaced per call rather than panicking.
+fn http_client() -> Result<&'static reqwest::Client> {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    if let Some(client) = CLIENT.get() {
+        return Ok(client);
+    }
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
-    let response = client
+    // A concurrent init may have won the race; its client is used, ours dropped.
+    Ok(CLIENT.get_or_init(|| client))
+}
+
+/// One rate-limit point per call regardless of section count (verified
+/// 2026-07-11 with 2 aliased searches in one request).
+pub async fn fetch_sections(token: &str, sections: &[Section]) -> Result<Fetched> {
+    let (query, variables) = build_query(sections);
+    let response = http_client()?
         .post("https://api.github.com/graphql")
         .bearer_auth(token)
         .header("User-Agent", "ghbox")
