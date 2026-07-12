@@ -17,7 +17,9 @@ use crate::app::{App, DoneEntry};
 
 enum Msg {
     Key(crossterm::event::KeyEvent),
-    Sections(Box<ghbox_core::Result<Vec<SectionResult>>>),
+    /// Built sections plus any GraphQL `errors` that came back with partial
+    /// data (SAML-blocked org, etc.) — surfaced in the status bar.
+    Sections(Box<ghbox_core::Result<(Vec<SectionResult>, Vec<String>)>>),
     Redraw,
 }
 
@@ -29,10 +31,11 @@ async fn fetch_and_build(
     token: &str,
     sections: &[Section],
     db_path: &Path,
-) -> ghbox_core::Result<Vec<SectionResult>> {
+) -> ghbox_core::Result<(Vec<SectionResult>, Vec<String>)> {
     let fetched = github::fetch_sections(token, sections).await?;
     let store = Store::open(db_path)?;
-    build_sections(sections, &fetched, &store).await
+    let results = build_sections(sections, &fetched, &store).await?;
+    Ok((results, fetched.errors))
 }
 
 /// `build_sections` holds `&Store` across the command-filter `.await`, and
@@ -144,10 +147,10 @@ async fn run(
                 handle_key(key.code, &mut app, &config, &store, &tx, &fetching, &token)
             }
             Msg::Sections(result) => match *result {
-                Ok(results) => match app.apply_results(results) {
-                    Some(e) => app.status = format!("filter error: {e}"),
-                    None => app.status = format!("updated {}", now_hms()),
-                },
+                Ok((results, api_errors)) => {
+                    let filter_error = app.apply_results(results);
+                    app.status = compose_status(now_hms(), filter_error, &api_errors);
+                }
                 Err(e) => app.status = format!("fetch error: {e}"),
             },
             Msg::Redraw => {}
@@ -158,6 +161,21 @@ async fn run(
         terminal.draw(|f| ui::draw(f, &app, &config))?;
     }
     Ok(())
+}
+
+/// Builds the post-fetch status line. A per-section filter error is the most
+/// actionable signal so it leads; GraphQL `errors` (partial-failure warnings)
+/// are appended so a section emptied by a SAML block can't read as "all clear".
+fn compose_status(hms: String, filter_error: Option<String>, api_errors: &[String]) -> String {
+    let base = match filter_error {
+        Some(e) => format!("filter error: {e}"),
+        None => format!("updated {hms}"),
+    };
+    if api_errors.is_empty() {
+        base
+    } else {
+        format!("{base} ⚠ API: {}", api_errors.join("; "))
+    }
 }
 
 /// HH:MM:SS local-ish time without pulling in chrono (UTC is fine for MVP).
@@ -186,6 +204,53 @@ fn key_matches(spec: KeySpec, code: KeyCode) -> bool {
 
 fn binding_matches(binding: &KeyBinding, code: KeyCode) -> bool {
     binding.0.iter().any(|spec| key_matches(*spec, code))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compose_status;
+
+    #[test]
+    fn status_is_plain_update_when_no_errors() {
+        let s = compose_status("00:00:00 UTC".into(), None, &[]);
+        assert_eq!(s, "updated 00:00:00 UTC");
+    }
+
+    #[test]
+    fn status_leads_with_filter_error() {
+        let s = compose_status(
+            "00:00:00 UTC".into(),
+            Some("sec: exited with 1".into()),
+            &[],
+        );
+        assert_eq!(s, "filter error: sec: exited with 1");
+    }
+
+    #[test]
+    fn status_appends_api_warnings_after_update() {
+        let s = compose_status(
+            "00:00:00 UTC".into(),
+            None,
+            &["SAML enforcement".to_string(), "rate limited".to_string()],
+        );
+        assert_eq!(
+            s,
+            "updated 00:00:00 UTC ⚠ API: SAML enforcement; rate limited"
+        );
+    }
+
+    #[test]
+    fn status_shows_both_filter_error_and_api_warnings() {
+        let s = compose_status(
+            "00:00:00 UTC".into(),
+            Some("sec: exited with 1".into()),
+            &["SAML enforcement".to_string()],
+        );
+        assert_eq!(
+            s,
+            "filter error: sec: exited with 1 ⚠ API: SAML enforcement"
+        );
+    }
 }
 
 fn handle_key(

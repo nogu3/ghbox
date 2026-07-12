@@ -149,6 +149,7 @@ mod tests {
         Fetched {
             viewer_login: "nogu3".into(),
             sections,
+            errors: vec![],
         }
     }
 

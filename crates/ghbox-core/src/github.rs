@@ -64,6 +64,10 @@ pub fn get_token() -> Result<String> {
 pub struct Fetched {
     pub viewer_login: String,
     pub sections: Vec<Vec<PrData>>,
+    /// GraphQL `errors` returned alongside usable `data` (e.g. one
+    /// SAML-protected org node FORBIDDEN while the rest succeeded). Surfaced
+    /// so a partially-empty result is not mistaken for "all clear".
+    pub errors: Vec<String>,
 }
 
 /// One PR as returned by search, before filtering.
@@ -158,22 +162,22 @@ pub async fn fetch_sections(token: &str, sections: &[Section]) -> Result<Fetched
 
 pub fn parse_sections(json: &str, section_count: usize) -> Result<Fetched> {
     let resp: SectionsResponse = serde_json::from_str(json)?;
+    let errors: Vec<String> = resp
+        .errors
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| e.message)
+        .collect();
     // GitHub may return HTTP 200 with both `errors` and usable `data` (e.g.
     // one SAML-protected org node is FORBIDDEN while the rest succeeds).
     // Prefer partial data; only treat `errors` as fatal without data.
     let mut data = match resp.data {
         Some(data) => data,
         None => {
-            let messages: Vec<String> = resp
-                .errors
-                .unwrap_or_default()
-                .into_iter()
-                .map(|e| e.message)
-                .collect();
-            let message = if messages.is_empty() {
+            let message = if errors.is_empty() {
                 "response has neither data nor errors".into()
             } else {
-                messages.join("; ")
+                errors.join("; ")
             };
             return Err(Error::Api(message));
         }
@@ -230,6 +234,7 @@ pub fn parse_sections(json: &str, section_count: usize) -> Result<Fetched> {
     Ok(Fetched {
         viewer_login: data.viewer.login,
         sections,
+        errors,
     })
 }
 
@@ -360,6 +365,15 @@ mod tests {
         let fetched = parse_sections(json, 1).unwrap();
         assert_eq!(fetched.viewer_login, "nogu3");
         assert!(fetched.sections[0].is_empty());
+        // the partial-failure errors must be surfaced, not silently dropped:
+        // an empty section from a SAML block otherwise reads as "all clear"
+        assert_eq!(fetched.errors, vec!["SAML enforcement".to_string()]);
+    }
+
+    #[test]
+    fn parse_sections_clean_response_has_no_errors() {
+        let fetched = parse_sections(SECTIONS_FIXTURE, 2).unwrap();
+        assert!(fetched.errors.is_empty());
     }
 
     #[test]
