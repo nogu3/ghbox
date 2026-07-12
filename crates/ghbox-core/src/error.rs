@@ -8,6 +8,8 @@ pub enum Error {
     Config(String),
     #[error("db schema error: {0}")]
     Schema(String),
+    #[error("{0}")]
+    Filter(String),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
     #[error(transparent)]
