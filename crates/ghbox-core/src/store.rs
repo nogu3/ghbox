@@ -123,6 +123,20 @@ mod tests {
     }
 
     #[test]
+    fn busy_timeout_is_set() {
+        // Two connections share the NAS DB (main loop + fetch task); without
+        // a busy timeout a write collision surfaces as a spurious SQLITE_BUSY.
+        // rusqlite sets 5000ms on every open — this pins that behavior so a
+        // rusqlite upgrade dropping the default gets caught here.
+        let store = Store::open_in_memory().unwrap();
+        let ms: i64 = store
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert!(ms >= 5000, "busy_timeout is {ms}ms");
+    }
+
+    #[test]
     fn mark_done_then_is_done() {
         let store = Store::open_in_memory().unwrap();
         store.mark_done(KIND_MERGE_COMMENT, "123").unwrap();
