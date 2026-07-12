@@ -173,9 +173,10 @@ fn key_glyph(spec: KeySpec) -> String {
 
 fn help_line(kb: &Keybindings) -> String {
     format!(
-        "{}/{}:移動  {}:切替  {}:開く  {}:対応済み  {}:更新  {}:終了",
+        "{}/{}:移動  {}/{}:切替  {}:開く  {}:対応済み  {}:更新  {}:終了",
         key_glyph(kb.down.primary()),
         key_glyph(kb.up.primary()),
+        key_glyph(kb.prev_section.primary()),
         key_glyph(kb.next_section.primary()),
         key_glyph(kb.open.primary()),
         key_glyph(kb.done.primary()),
@@ -268,7 +269,7 @@ mod tests {
         let kb = Keybindings::default();
         assert_eq!(
             help_line(&kb),
-            "↓/↑:移動  →:切替  o:開く  d:対応済み  r:更新  q:終了"
+            "↓/↑:移動  ←/→:切替  o:開く  d:対応済み  r:更新  q:終了"
         );
     }
 }
