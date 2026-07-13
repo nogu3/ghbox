@@ -370,7 +370,7 @@ impl Default for Keybindings {
 fn default_sections() -> Vec<Section> {
     vec![
         Section {
-            title: "マージ依頼".into(),
+            title: "Merge Requests".into(),
             query: "is:pr is:open mentions:@me".into(),
             columns: vec![
                 Column::Repo,
@@ -384,7 +384,7 @@ fn default_sections() -> Vec<Section> {
             },
         },
         Section {
-            title: "レビュー依頼".into(),
+            title: "Review Requests".into(),
             query: "is:pr is:open review-requested:@me".into(),
             columns: default_columns(),
             filter: SectionFilter::None,
@@ -500,7 +500,7 @@ mod tests {
         assert_eq!(cfg.poll_interval_secs, 300);
         assert!(cfg.db_path.ends_with("ghbox/state.db"));
         assert_eq!(cfg.sections.len(), 2);
-        assert_eq!(cfg.sections[0].title, "マージ依頼");
+        assert_eq!(cfg.sections[0].title, "Merge Requests");
         assert!(matches!(
             cfg.sections[0].filter,
             SectionFilter::CommentMention { .. }

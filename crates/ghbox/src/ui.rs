@@ -329,7 +329,7 @@ mod tests {
         terminal.draw(|f| draw(f, &app, &config, false)).unwrap();
         let text = buffer_text(&terminal);
         assert!(
-            text.contains("マージ依頼 1 │ レビュー依頼 0"),
+            text.contains("Merge Requests 1 │ Review Requests 0"),
             "hand-built tab line with │ divider"
         );
         assert!(text.contains("─────"), "horizontal rule under tabs");
