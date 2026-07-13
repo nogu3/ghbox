@@ -73,8 +73,10 @@ fn spawn_fetch(
     let guard = FetchingGuard(Arc::clone(fetching));
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
-        let _guard = guard;
         let result = handle.block_on(fetch_and_build(&token, &sections, &db_path));
+        // Clear the in-flight flag before notifying the UI so the ⟳ icon is
+        // already off when the result is drawn. Unwind still drops the guard.
+        drop(guard);
         let _ = tx.send(Msg::Sections(Box::new(result)));
     });
     true
@@ -141,19 +143,21 @@ async fn run(
                 break;
             }
             // Skip this tick if a fetch is still in flight; no message needed.
-            spawn_fetch(
+            if spawn_fetch(
                 &fetch_tx,
                 &fetch_fetching,
                 fetch_token.clone(),
                 fetch_sections_cfg.clone(),
                 fetch_db_path.clone(),
-            );
+            ) {
+                let _ = fetch_tx.send(Msg::Redraw);
+            }
         }
     });
 
     let titles = config.sections.iter().map(|s| s.title.clone()).collect();
     let mut app = App::new(titles);
-    terminal.draw(|f| ui::draw(f, &app, &config))?;
+    terminal.draw(|f| ui::draw(f, &app, &config, fetching.load(Ordering::SeqCst)))?;
 
     while let Some(msg) = rx.recv().await {
         match msg {
@@ -172,7 +176,7 @@ async fn run(
         if app.should_quit {
             break;
         }
-        terminal.draw(|f| ui::draw(f, &app, &config))?;
+        terminal.draw(|f| ui::draw(f, &app, &config, fetching.load(Ordering::SeqCst)))?;
     }
     Ok(())
 }
@@ -183,7 +187,7 @@ async fn run(
 fn compose_status(hms: String, filter_error: Option<String>, api_errors: &[String]) -> String {
     let base = match filter_error {
         Some(e) => format!("filter error: {e}"),
-        None => format!("updated {hms}"),
+        None => hms,
     };
     if api_errors.is_empty() {
         base
@@ -192,14 +196,14 @@ fn compose_status(hms: String, filter_error: Option<String>, api_errors: &[Strin
     }
 }
 
-/// HH:MM:SS local-ish time without pulling in chrono (UTC is fine for MVP).
+/// HH:MM:SS UTC without pulling in chrono (shown next to the ✓ icon).
 fn now_hms() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let (h, m, s) = ((secs / 3600) % 24, (secs / 60) % 60, secs % 60);
-    format!("{h:02}:{m:02}:{s:02} UTC")
+    format!("{h:02}:{m:02}:{s:02}")
 }
 
 fn key_matches(spec: KeySpec, code: KeyCode) -> bool {
@@ -251,37 +255,30 @@ mod tests {
 
     #[test]
     fn status_is_plain_update_when_no_errors() {
-        let s = compose_status("00:00:00 UTC".into(), None, &[]);
-        assert_eq!(s, "updated 00:00:00 UTC");
+        let s = compose_status("00:00:00".into(), None, &[]);
+        assert_eq!(s, "00:00:00");
     }
 
     #[test]
     fn status_leads_with_filter_error() {
-        let s = compose_status(
-            "00:00:00 UTC".into(),
-            Some("sec: exited with 1".into()),
-            &[],
-        );
+        let s = compose_status("00:00:00".into(), Some("sec: exited with 1".into()), &[]);
         assert_eq!(s, "filter error: sec: exited with 1");
     }
 
     #[test]
     fn status_appends_api_warnings_after_update() {
         let s = compose_status(
-            "00:00:00 UTC".into(),
+            "00:00:00".into(),
             None,
             &["SAML enforcement".to_string(), "rate limited".to_string()],
         );
-        assert_eq!(
-            s,
-            "updated 00:00:00 UTC ⚠ API: SAML enforcement; rate limited"
-        );
+        assert_eq!(s, "00:00:00 ⚠ API: SAML enforcement; rate limited");
     }
 
     #[test]
     fn status_shows_both_filter_error_and_api_warnings() {
         let s = compose_status(
-            "00:00:00 UTC".into(),
+            "00:00:00".into(),
             Some("sec: exited with 1".into()),
             &["SAML enforcement".to_string()],
         );

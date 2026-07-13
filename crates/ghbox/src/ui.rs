@@ -8,7 +8,7 @@ use ratatui::widgets::{Cell, HighlightSpacing, Paragraph, Row, Table, TableState
 
 use crate::app::App;
 
-pub fn draw(frame: &mut Frame, app: &App, config: &Config) {
+pub fn draw(frame: &mut Frame, app: &App, config: &Config, fetching: bool) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -22,7 +22,7 @@ pub fn draw(frame: &mut Frame, app: &App, config: &Config) {
     draw_tabs(frame, app, &config.theme, chunks[0]);
     draw_rule(frame, &config.theme, chunks[1]);
     draw_table(frame, app, config, chunks[2]);
-    draw_status_bar(frame, app, config, chunks[3]);
+    draw_status_bar(frame, app, config, fetching, chunks[3]);
 }
 
 fn color(c: ThemeColor) -> Color {
@@ -93,8 +93,7 @@ fn column_label(col: Column) -> &'static str {
 /// "2026-07-12T10:30:00Z" → "2d" (relative to now_epoch, unix seconds).
 /// Falls back to "MM-DD" past 30 days and to the raw string when unparsable.
 fn fmt_relative(ts: &str, now_epoch: i64) -> String {
-    let parsed =
-        time::OffsetDateTime::parse(ts, &time::format_description::well_known::Rfc3339);
+    let parsed = time::OffsetDateTime::parse(ts, &time::format_description::well_known::Rfc3339);
     let Ok(t) = parsed else {
         return ts.to_string();
     };
@@ -247,7 +246,7 @@ fn key_glyph(spec: KeySpec) -> String {
 
 fn help_line(kb: &Keybindings) -> String {
     format!(
-        "{}/{}:移動  {}/{}:切替  {}:開く  {}:対応済み  {}:更新  {}:終了",
+        "{}{} move · {}{} section · {} open · {} done · {} refresh · {} quit",
         key_glyph(kb.down.primary()),
         key_glyph(kb.up.primary()),
         key_glyph(kb.prev_section.primary()),
@@ -259,12 +258,19 @@ fn help_line(kb: &Keybindings) -> String {
     )
 }
 
-fn draw_status_bar(frame: &mut Frame, app: &App, config: &Config, area: Rect) {
-    let text = format!(" {} | {}", app.status, help_line(&config.keybindings));
-    frame.render_widget(
-        Paragraph::new(text).style(Style::default().fg(color(config.theme.status_bar))),
-        area,
-    );
+fn draw_status_bar(frame: &mut Frame, app: &App, config: &Config, fetching: bool, area: Rect) {
+    let theme = &config.theme;
+    let icon = if fetching { "⟳" } else { "✓" };
+    let line = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(icon, Style::default().fg(color(theme.tab_active))),
+        Span::raw(format!(" {}", app.status)),
+        Span::styled(
+            format!(" · {}", help_line(&config.keybindings)),
+            Style::default().fg(color(theme.status_bar)),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
 }
 
 #[cfg(test)]
@@ -318,9 +324,9 @@ mod tests {
                 created_at: "2026-07-11T00:00:00Z".into(),
             }),
         });
-        app.status = "updated 12:34:56 UTC".into();
+        app.status = "12:34:56".into();
         let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
-        terminal.draw(|f| draw(f, &app, &config)).unwrap();
+        terminal.draw(|f| draw(f, &app, &config, false)).unwrap();
         let text = buffer_text(&terminal);
         assert!(
             text.contains("マージ依頼 1 │ レビュー依頼 0"),
@@ -332,8 +338,8 @@ mod tests {
         assert!(text.contains("Fix xxx"), "title column");
         assert!(text.contains("@nogu3 merge please"), "comment first line");
         assert!(!text.contains("second line"), "only first line of comment");
-        assert!(text.contains("updated 12:34:56 UTC"), "status bar");
-        assert!(text.contains("q:終了"), "help from keybindings");
+        assert!(text.contains("✓ 12:34:56"), "status with idle icon");
+        assert!(text.contains("q quit"), "english help from keybindings");
         assert!(text.contains("REPO"), "uppercase header");
         assert!(text.contains("TITLE"), "uppercase header");
         assert!(text.contains("▌"), "selection marker");
@@ -358,7 +364,7 @@ mod tests {
             });
         }
         let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
-        terminal.draw(|f| draw(f, &app, &config)).unwrap();
+        terminal.draw(|f| draw(f, &app, &config, false)).unwrap();
         let buffer = terminal.backend().buffer();
         let area = *buffer.area();
         let cells = || (0..area.height).flat_map(|y| (0..area.width).map(move |x| (x, y)));
@@ -385,7 +391,7 @@ mod tests {
         let titles = config.sections.iter().map(|s| s.title.clone()).collect();
         let app = App::new(titles);
         let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
-        terminal.draw(|f| draw(f, &app, &config)).unwrap();
+        terminal.draw(|f| draw(f, &app, &config, false)).unwrap();
         let text = buffer_text(&terminal);
         assert!(text.contains("no items"), "placeholder for empty section");
         assert!(!text.contains("REPO"), "header hidden when empty");
@@ -415,7 +421,19 @@ mod tests {
         let kb = Keybindings::default();
         assert_eq!(
             help_line(&kb),
-            "↓/↑:移動  ←/→:切替  o:開く  d:対応済み  r:更新  q:終了"
+            "↓↑ move · ←→ section · o open · d done · r refresh · q quit"
         );
+    }
+
+    #[test]
+    fn status_bar_shows_spinner_while_fetching() {
+        let config = Config::default();
+        let titles = config.sections.iter().map(|s| s.title.clone()).collect();
+        let mut app = App::new(titles);
+        app.status = "refreshing...".into();
+        let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
+        terminal.draw(|f| draw(f, &app, &config, true)).unwrap();
+        let text = buffer_text(&terminal);
+        assert!(text.contains("⟳ refreshing..."), "fetching icon + status");
     }
 }
