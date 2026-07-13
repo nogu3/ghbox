@@ -3,8 +3,8 @@ use ghbox_core::item::Item;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Tabs};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
 
 use crate::app::App;
 
@@ -13,14 +13,16 @@ pub fn draw(frame: &mut Frame, app: &App, config: &Config) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
+            Constraint::Length(1),
             Constraint::Fill(1),
             Constraint::Length(1),
         ])
         .split(frame.area());
 
     draw_tabs(frame, app, &config.theme, chunks[0]);
-    draw_table(frame, app, config, chunks[1]);
-    draw_status_bar(frame, app, config, chunks[2]);
+    draw_rule(frame, &config.theme, chunks[1]);
+    draw_table(frame, app, config, chunks[2]);
+    draw_status_bar(frame, app, config, chunks[3]);
 }
 
 fn color(c: ThemeColor) -> Color {
@@ -48,20 +50,32 @@ fn color(c: ThemeColor) -> Color {
 }
 
 fn draw_tabs(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
-    let titles: Vec<Line> = app
-        .sections
-        .iter()
-        .map(|s| Line::raw(format!("{} {}", s.title, s.items.len())))
-        .collect();
-    let tabs = Tabs::new(titles)
-        .select(app.active)
-        .style(Style::default().fg(color(theme.tab_inactive)))
-        .highlight_style(
+    let dim = Style::default().fg(color(theme.tab_inactive));
+    let mut spans = vec![Span::raw(" ")];
+    for (i, s) in app.sections.iter().enumerate() {
+        let title_style = if i == app.active {
             Style::default()
                 .fg(color(theme.tab_active))
-                .add_modifier(Modifier::BOLD),
-        );
-    frame.render_widget(tabs, area);
+                .add_modifier(Modifier::BOLD)
+        } else {
+            dim
+        };
+        spans.push(Span::styled(s.title.clone(), title_style));
+        let count = format!(" {}", s.items.len());
+        spans.push(Span::styled(count, dim));
+        if i < app.sections.len() - 1 {
+            spans.push(Span::styled(" │ ", dim));
+        }
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn draw_rule(frame: &mut Frame, theme: &Theme, area: Rect) {
+    let rule = "─".repeat(area.width as usize);
+    frame.render_widget(
+        Paragraph::new(rule).style(Style::default().fg(color(theme.border))),
+        area,
+    );
 }
 
 fn column_label(col: Column) -> &'static str {
@@ -228,6 +242,7 @@ mod tests {
     /// double-width (e.g. CJK) character, so multi-byte text like
     /// "マージ依頼" reads back contiguous instead of space-separated.
     fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
+        use unicode_width::UnicodeWidthStr;
         let buffer = terminal.backend().buffer();
         let area = buffer.area();
         let mut out = String::new();
@@ -239,7 +254,7 @@ mod tests {
                     prev_wide = false;
                     continue;
                 }
-                prev_wide = symbol.len() > 1;
+                prev_wide = symbol.width() > 1;
                 out.push_str(symbol);
             }
         }
@@ -270,8 +285,11 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
         terminal.draw(|f| draw(f, &app, &config)).unwrap();
         let text = buffer_text(&terminal);
-        assert!(text.contains("マージ依頼 1"), "tab bar with count");
-        assert!(text.contains("レビュー依頼 0"), "inactive tab");
+        assert!(
+            text.contains("マージ依頼 1 │ レビュー依頼 0"),
+            "hand-built tab line with │ divider"
+        );
+        assert!(text.contains("─────"), "horizontal rule under tabs");
         assert!(text.contains("nogu3/casa"), "repo column");
         assert!(text.contains("#12"), "number column");
         assert!(text.contains("Fix xxx"), "title column");
