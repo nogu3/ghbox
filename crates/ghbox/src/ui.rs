@@ -1,10 +1,10 @@
 use ghbox_core::config::{Column, Config, KeySpec, Keybindings, NamedColor, Theme, ThemeColor};
 use ghbox_core::item::Item;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState};
+use ratatui::text::{Line, Span, Text};
+use ratatui::widgets::{Cell, HighlightSpacing, Paragraph, Row, Table, TableState};
 
 use crate::app::App;
 
@@ -80,13 +80,13 @@ fn draw_rule(frame: &mut Frame, theme: &Theme, area: Rect) {
 
 fn column_label(col: Column) -> &'static str {
     match col {
-        Column::Repo => "repo",
+        Column::Repo => "REPO",
         Column::Number => "#",
-        Column::Title => "title",
-        Column::Author => "author",
-        Column::Comment => "comment",
-        Column::Updated => "updated",
-        Column::Created => "created",
+        Column::Title => "TITLE",
+        Column::Author => "AUTHOR",
+        Column::Comment => "COMMENT",
+        Column::Updated => "UPDATED",
+        Column::Created => "CREATED",
     }
 }
 
@@ -142,6 +142,18 @@ fn cell_text(item: &Item, col: Column, now_epoch: i64) -> String {
     }
 }
 
+/// repo/comment are fixed DarkGray context columns; number/author/time are
+/// themeable so users can match their terminal palette.
+fn cell_style(col: Column, theme: &Theme) -> Style {
+    match col {
+        Column::Repo | Column::Comment => Style::default().fg(Color::DarkGray),
+        Column::Number => Style::default().fg(color(theme.pr_number)),
+        Column::Title => Style::default(),
+        Column::Author => Style::default().fg(color(theme.author)),
+        Column::Updated | Column::Created => Style::default().fg(color(theme.time)),
+    }
+}
+
 fn column_constraint(col: Column, items: &[Item]) -> Constraint {
     match col {
         Column::Repo => {
@@ -161,15 +173,45 @@ fn draw_table(frame: &mut Frame, app: &App, config: &Config, area: Rect) {
     let columns = &config.sections[app.active].columns;
     let items = &app.active_section().items;
 
+    if items.is_empty() {
+        if area.height == 0 {
+            return;
+        }
+        let centered = Rect {
+            x: area.x,
+            y: area.y + area.height / 2,
+            width: area.width,
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new("no items")
+                .style(Style::default().fg(Color::DarkGray))
+                .alignment(Alignment::Center),
+            centered,
+        );
+        return;
+    }
+
+    let now = now_epoch();
     let header = Row::new(columns.iter().map(|&c| Cell::from(column_label(c)))).style(
         Style::default()
             .fg(color(theme.table_header))
             .add_modifier(Modifier::BOLD),
     );
-    let now = now_epoch();
-    let rows = items
-        .iter()
-        .map(|item| Row::new(columns.iter().map(|&c| Cell::from(cell_text(item, c, now)))));
+    // row_highlight_style patches the whole selected row area (including the
+    // highlight symbol), so a fg there would clobber the marker's accent
+    // color. Instead the selected row's fg is set per cell here and the
+    // highlight style only carries bg + BOLD.
+    let rows = items.iter().enumerate().map(|(i, item)| {
+        Row::new(columns.iter().map(|&c| {
+            let style = if i == app.selected {
+                Style::default().fg(color(theme.selection_fg))
+            } else {
+                cell_style(c, theme)
+            };
+            Cell::from(cell_text(item, c, now)).style(style)
+        }))
+    });
     let widths: Vec<Constraint> = columns
         .iter()
         .map(|&c| column_constraint(c, items))
@@ -177,24 +219,19 @@ fn draw_table(frame: &mut Frame, app: &App, config: &Config, area: Rect) {
 
     let table = Table::new(rows, widths)
         .header(header)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(color(theme.border))),
-        )
         .row_highlight_style(
             Style::default()
                 .bg(color(theme.selection_bg))
-                .fg(color(theme.selection_fg))
                 .add_modifier(Modifier::BOLD),
-        );
+        )
+        .highlight_symbol(Text::styled(
+            "▌ ",
+            Style::default().fg(color(theme.tab_active)),
+        ))
+        .highlight_spacing(HighlightSpacing::Always);
 
     let mut state = TableState::default();
-    state.select(if items.is_empty() {
-        None
-    } else {
-        Some(app.selected)
-    });
+    state.select(Some(app.selected));
     frame.render_stateful_widget(table, area, &mut state);
 }
 
@@ -297,6 +334,61 @@ mod tests {
         assert!(!text.contains("second line"), "only first line of comment");
         assert!(text.contains("updated 12:34:56 UTC"), "status bar");
         assert!(text.contains("q:終了"), "help from keybindings");
+        assert!(text.contains("REPO"), "uppercase header");
+        assert!(text.contains("TITLE"), "uppercase header");
+        assert!(text.contains("▌"), "selection marker");
+        assert!(!text.contains("┌"), "no outer border");
+    }
+
+    #[test]
+    fn selection_marker_keeps_accent_and_unselected_rows_keep_column_colors() {
+        let config = Config::default();
+        let titles = config.sections.iter().map(|s| s.title.clone()).collect();
+        let mut app = App::new(titles);
+        for n in [1, 2] {
+            app.sections[0].items.push(Item {
+                repo: "nogu3/casa".into(),
+                pr_number: n,
+                pr_title: format!("PR {n}"),
+                pr_url: "u".into(),
+                pr_author: "alice".into(),
+                pr_updated_at: "2026-07-12T10:30:00Z".into(),
+                pr_created_at: "2026-07-01T00:00:00Z".into(),
+                comment: None,
+            });
+        }
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        terminal.draw(|f| draw(f, &app, &config)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let area = *buffer.area();
+        let cells = || (0..area.height).flat_map(|y| (0..area.width).map(move |x| (x, y)));
+
+        // マーカーは row_highlight_style の fg に潰されず accent(tab_active=Yellow)を保つ
+        let (mx, my) = cells()
+            .find(|&(x, y)| buffer[(x, y)].symbol() == "▌")
+            .expect("selection marker cell");
+        assert_eq!(buffer[(mx, my)].fg, Color::Yellow, "marker keeps accent fg");
+        // 選択行本体は selection_fg on selection_bg
+        let body = &buffer[(mx + 3, my)];
+        assert_eq!(body.bg, Color::Blue, "selected row bg");
+        assert_eq!(body.fg, Color::White, "selected row fg");
+        // 非選択行の #number セルはカラム色(pr_number=Green)を保つ
+        assert!(
+            cells().any(|(x, y)| buffer[(x, y)].fg == Color::Green),
+            "unselected row keeps column color"
+        );
+    }
+
+    #[test]
+    fn empty_section_shows_no_items_placeholder() {
+        let config = Config::default();
+        let titles = config.sections.iter().map(|s| s.title.clone()).collect();
+        let app = App::new(titles);
+        let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
+        terminal.draw(|f| draw(f, &app, &config)).unwrap();
+        let text = buffer_text(&terminal);
+        assert!(text.contains("no items"), "placeholder for empty section");
+        assert!(!text.contains("REPO"), "header hidden when empty");
     }
 
     fn epoch(ts: &str) -> i64 {
