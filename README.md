@@ -61,8 +61,9 @@ query = "is:pr is:open involves:@me"
 filter = { type = "command", command = "jq -r 'select(.pr_author != \"nogu3\") | .id'" }
 
 [theme]                             # 省略キーはデフォルト。ratatui 名前付き色(小文字) or "#rrggbb"
-tab_active = "yellow"
+tab_active = "yellow"               # アクティブタブ・選択マーカー・fetch アイコンの accent 色
 selection_bg = "blue"
+pr_number = "green"                 # PR番号カラム。ほかに author / time カラムも指定可
 
 [keybindings]                       # 省略キーはデフォルト。値は1文字/tab/backtab/enter/up/down/left/right/esc、または配列
 quit = "q"
