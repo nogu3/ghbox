@@ -76,17 +76,36 @@ fn column_label(col: Column) -> &'static str {
     }
 }
 
-/// "2026-07-12T10:30:00Z" → "07-12 10:30". GitHub timestamps are ASCII;
-/// anything unexpected is shown as-is.
-fn fmt_ts(ts: &str) -> String {
-    if ts.len() >= 16 && ts.is_ascii() {
-        format!("{} {}", &ts[5..10], &ts[11..16])
+/// "2026-07-12T10:30:00Z" → "2d" (relative to now_epoch, unix seconds).
+/// Falls back to "MM-DD" past 30 days and to the raw string when unparsable.
+fn fmt_relative(ts: &str, now_epoch: i64) -> String {
+    let parsed =
+        time::OffsetDateTime::parse(ts, &time::format_description::well_known::Rfc3339);
+    let Ok(t) = parsed else {
+        return ts.to_string();
+    };
+    let delta = now_epoch - t.unix_timestamp();
+    if delta < 60 {
+        "now".to_string()
+    } else if delta < 3600 {
+        format!("{}m", delta / 60)
+    } else if delta < 86_400 {
+        format!("{}h", delta / 3600)
+    } else if delta < 30 * 86_400 {
+        format!("{}d", delta / 86_400)
     } else {
-        ts.to_string()
+        ts[5..10].to_string() // RFC3339パース済みなのでASCII保証
     }
 }
 
-fn cell_text(item: &Item, col: Column) -> String {
+fn now_epoch() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn cell_text(item: &Item, col: Column, now_epoch: i64) -> String {
     match col {
         Column::Repo => item.repo.clone(),
         Column::Number => format!("#{}", item.pr_number),
@@ -98,11 +117,14 @@ fn cell_text(item: &Item, col: Column) -> String {
             .and_then(|c| c.body.lines().next())
             .unwrap_or_default()
             .to_string(),
-        Column::Updated => fmt_ts(&item.pr_updated_at),
-        Column::Created => fmt_ts(match &item.comment {
-            Some(c) => &c.created_at,
-            None => &item.pr_created_at,
-        }),
+        Column::Updated => fmt_relative(&item.pr_updated_at, now_epoch),
+        Column::Created => fmt_relative(
+            match &item.comment {
+                Some(c) => &c.created_at,
+                None => &item.pr_created_at,
+            },
+            now_epoch,
+        ),
     }
 }
 
@@ -116,7 +138,7 @@ fn column_constraint(col: Column, items: &[Item]) -> Constraint {
         Column::Title => Constraint::Fill(1),
         Column::Author => Constraint::Length(12),
         Column::Comment => Constraint::Length(30),
-        Column::Updated | Column::Created => Constraint::Length(11),
+        Column::Updated | Column::Created => Constraint::Length(7),
     }
 }
 
@@ -130,9 +152,10 @@ fn draw_table(frame: &mut Frame, app: &App, config: &Config, area: Rect) {
             .fg(color(theme.table_header))
             .add_modifier(Modifier::BOLD),
     );
+    let now = now_epoch();
     let rows = items
         .iter()
-        .map(|item| Row::new(columns.iter().map(|&c| Cell::from(cell_text(item, c)))));
+        .map(|item| Row::new(columns.iter().map(|&c| Cell::from(cell_text(item, c, now)))));
     let widths: Vec<Constraint> = columns
         .iter()
         .map(|&c| column_constraint(c, items))
@@ -258,10 +281,23 @@ mod tests {
         assert!(text.contains("q:終了"), "help from keybindings");
     }
 
+    fn epoch(ts: &str) -> i64 {
+        time::OffsetDateTime::parse(ts, &time::format_description::well_known::Rfc3339)
+            .unwrap()
+            .unix_timestamp()
+    }
+
     #[test]
-    fn fmt_ts_formats_iso8601() {
-        assert_eq!(fmt_ts("2026-07-12T10:30:00Z"), "07-12 10:30");
-        assert_eq!(fmt_ts("garbage"), "garbage");
+    fn fmt_relative_boundaries() {
+        let now = epoch("2026-07-13T12:00:00Z");
+        assert_eq!(fmt_relative("2026-07-13T11:59:30Z", now), "now");
+        assert_eq!(fmt_relative("2026-07-13T11:30:00Z", now), "30m");
+        assert_eq!(fmt_relative("2026-07-13T07:00:00Z", now), "5h");
+        assert_eq!(fmt_relative("2026-07-11T12:00:00Z", now), "2d");
+        assert_eq!(fmt_relative("2026-05-01T00:00:00Z", now), "05-01");
+        // クロックスキューで未来になったタイムスタンプは "now" 扱い
+        assert_eq!(fmt_relative("2026-07-14T00:00:00Z", now), "now");
+        assert_eq!(fmt_relative("garbage", now), "garbage");
     }
 
     #[test]
