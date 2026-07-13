@@ -190,6 +190,9 @@ pub struct Theme {
     pub selection_fg: ThemeColor,
     pub table_header: ThemeColor,
     pub status_bar: ThemeColor,
+    pub pr_number: ThemeColor,
+    pub author: ThemeColor,
+    pub time: ThemeColor,
 }
 
 impl Default for Theme {
@@ -203,6 +206,9 @@ impl Default for Theme {
             selection_fg: ThemeColor::Named(White),
             table_header: ThemeColor::Named(Cyan),
             status_bar: ThemeColor::Named(DarkGray),
+            pr_number: ThemeColor::Named(Green),
+            author: ThemeColor::Named(Magenta),
+            time: ThemeColor::Named(DarkGray),
         }
     }
 }
@@ -711,5 +717,15 @@ filter = { type = "command", command = "jq -r .id" }
     fn keybinding_primary_returns_first_key() {
         let cfg = parse("[keybindings]\ndown = [\"down\", \"j\"]\n").unwrap();
         assert_eq!(cfg.keybindings.down.primary(), KeySpec::Down);
+    }
+
+    #[test]
+    fn theme_column_colors_default_and_override() {
+        let cfg = parse("").unwrap();
+        assert_eq!(cfg.theme.pr_number, ThemeColor::Named(NamedColor::Green));
+        assert_eq!(cfg.theme.author, ThemeColor::Named(NamedColor::Magenta));
+        assert_eq!(cfg.theme.time, ThemeColor::Named(NamedColor::DarkGray));
+        let cfg = parse("[theme]\npr_number = \"cyan\"\n").unwrap();
+        assert_eq!(cfg.theme.pr_number, ThemeColor::Named(NamedColor::Cyan));
     }
 }
