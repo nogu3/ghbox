@@ -1,5 +1,5 @@
 use ghbox_core::config::{Column, Config, KeySpec, Keybindings, NamedColor, Theme, ThemeColor};
-use ghbox_core::item::Item;
+use ghbox_core::item::{Item, PrState};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -80,6 +80,7 @@ fn draw_rule(frame: &mut Frame, theme: &Theme, area: Rect) {
 
 fn column_label(col: Column) -> &'static str {
     match col {
+        Column::State => "",
         Column::Repo => "REPO",
         Column::Number => "#",
         Column::Title => "TITLE",
@@ -134,8 +135,9 @@ fn now_millis() -> u128 {
         .unwrap_or(0)
 }
 
-fn cell_text(item: &Item, col: Column, now_epoch: i64) -> String {
+fn cell_text(item: &Item, col: Column, now_epoch: i64, icons: bool) -> String {
     match col {
+        Column::State => state_icon(item.state, icons).to_string(),
         Column::Repo => item.repo.clone(),
         Column::Number => format!("#{}", item.pr_number),
         Column::Title => item.pr_title.clone(),
@@ -159,8 +161,9 @@ fn cell_text(item: &Item, col: Column, now_epoch: i64) -> String {
 
 /// repo/comment are de-emphasized via theme.faint; number/author/time are
 /// themeable so users can match their terminal palette.
-fn cell_style(col: Column, theme: &Theme) -> Style {
+fn cell_style(col: Column, theme: &Theme, state: PrState) -> Style {
     match col {
+        Column::State => Style::default().fg(color(state_color(state, theme))),
         Column::Repo | Column::Comment => Style::default().fg(color(theme.faint)),
         Column::Number => Style::default().fg(color(theme.pr_number)),
         Column::Title => Style::default(),
@@ -169,8 +172,32 @@ fn cell_style(col: Column, theme: &Theme) -> Style {
     }
 }
 
+fn state_color(state: PrState, theme: &Theme) -> ThemeColor {
+    match state {
+        PrState::Open => theme.state_open,
+        PrState::Draft => theme.state_draft,
+        PrState::Merged => theme.state_merged,
+        PrState::Closed => theme.state_closed,
+    }
+}
+
+/// Nerd Font octicons; with `icons = false` a plain dot is used and the
+/// state color alone carries the meaning.
+fn state_icon(state: PrState, icons: bool) -> &'static str {
+    if !icons {
+        return "●";
+    }
+    match state {
+        PrState::Open => "\u{f407}",   // nf-oct-git_pull_request
+        PrState::Draft => "\u{f4dd}",  // nf-oct-git_pull_request_draft
+        PrState::Merged => "\u{f419}", // nf-oct-git_merge
+        PrState::Closed => "\u{f4dc}", // nf-oct-git_pull_request_closed
+    }
+}
+
 fn column_constraint(col: Column, items: &[Item]) -> Constraint {
     match col {
+        Column::State => Constraint::Length(2),
         Column::Repo => {
             let max = items.iter().map(|i| i.repo.len()).max().unwrap_or(0);
             Constraint::Length(max.clamp(4, 30) as u16)
@@ -219,12 +246,12 @@ fn draw_table(frame: &mut Frame, app: &App, config: &Config, area: Rect) {
     // highlight style only carries bg + BOLD.
     let rows = items.iter().enumerate().map(|(i, item)| {
         Row::new(columns.iter().map(|&c| {
-            let style = if i == app.selected {
+            let style = if i == app.selected && c != Column::State {
                 Style::default().fg(color(theme.selection_fg))
             } else {
-                cell_style(c, theme)
+                cell_style(c, theme, item.state)
             };
-            Cell::from(cell_text(item, c, now)).style(style)
+            Cell::from(cell_text(item, c, now, config.icons)).style(style)
         }))
     });
     let widths: Vec<Constraint> = columns
@@ -296,7 +323,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, config: &Config, fetching: bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ghbox_core::item::{CommentInfo, PrState};
+    use ghbox_core::item::CommentInfo;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -401,7 +428,8 @@ mod tests {
             "marker keeps accent fg"
         );
         // 選択行本体は selection_fg on selection_bg
-        let body = &buffer[(mx + 3, my)];
+        // (highlight symbol "▌ " の2桁 + state 列の2桁の先、repo 列の中の "n")
+        let body = &buffer[(mx + 5, my)];
         assert_eq!(body.bg, Color::Rgb(0x31, 0x32, 0x44), "selected row bg");
         assert_eq!(body.fg, Color::Rgb(0xcd, 0xd6, 0xf4), "selected row fg");
         // 非選択行の #number セルはカラム色(pr_number=blue)を保つ
@@ -474,5 +502,85 @@ mod tests {
         );
         assert!(text.contains("refreshing..."), "status text");
         assert!(!text.contains("⟳"), "static icon replaced by animation");
+    }
+
+    fn item_with_state(n: u64, state: PrState) -> Item {
+        Item {
+            repo: "o/r".into(),
+            pr_number: n,
+            pr_title: format!("PR {n}"),
+            pr_url: "u".into(),
+            pr_author: "a".into(),
+            pr_updated_at: "2026-07-12T10:30:00Z".into(),
+            pr_created_at: "2026-07-01T00:00:00Z".into(),
+            state,
+            comment: None,
+        }
+    }
+
+    #[test]
+    fn state_column_shows_colored_icon_per_state_even_when_selected() {
+        let config = Config::default();
+        let titles = config.sections.iter().map(|s| s.title.clone()).collect();
+        let mut app = App::new(titles);
+        for (n, state) in [
+            (1, PrState::Open),
+            (2, PrState::Draft),
+            (3, PrState::Merged),
+            (4, PrState::Closed),
+        ] {
+            app.sections[0].items.push(item_with_state(n, state));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        terminal.draw(|f| draw(f, &app, &config, false)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let area = *buffer.area();
+        let find = |glyph: &str| {
+            (0..area.height)
+                .flat_map(|y| (0..area.width).map(move |x| (x, y)))
+                .find(|&(x, y)| buffer[(x, y)].symbol() == glyph)
+                .unwrap_or_else(|| panic!("glyph {glyph:?} not rendered"))
+        };
+        // 1行目(選択行)の open アイコンも selection_fg に潰されず状態色を保つ
+        let (x, y) = find("\u{f407}");
+        assert_eq!(
+            buffer[(x, y)].fg,
+            Color::Rgb(0xa6, 0xe3, 0xa1),
+            "open=green"
+        );
+        let (x, y) = find("\u{f4dd}");
+        assert_eq!(
+            buffer[(x, y)].fg,
+            Color::Rgb(0x6c, 0x70, 0x86),
+            "draft=overlay"
+        );
+        let (x, y) = find("\u{f419}");
+        assert_eq!(
+            buffer[(x, y)].fg,
+            Color::Rgb(0xcb, 0xa6, 0xf7),
+            "merged=mauve"
+        );
+        let (x, y) = find("\u{f4dc}");
+        assert_eq!(
+            buffer[(x, y)].fg,
+            Color::Rgb(0xf3, 0x8b, 0xa8),
+            "closed=red"
+        );
+    }
+
+    #[test]
+    fn icons_false_falls_back_to_colored_dot() {
+        let mut config = Config::default();
+        config.icons = false;
+        let titles = config.sections.iter().map(|s| s.title.clone()).collect();
+        let mut app = App::new(titles);
+        app.sections[0]
+            .items
+            .push(item_with_state(1, PrState::Open));
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        terminal.draw(|f| draw(f, &app, &config, false)).unwrap();
+        let text = buffer_text(&terminal);
+        assert!(text.contains("●"), "plain dot fallback");
+        assert!(!text.contains("\u{f407}"), "no nerd font glyph");
     }
 }

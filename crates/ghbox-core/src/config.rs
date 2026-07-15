@@ -8,6 +8,9 @@ use crate::{Error, Result};
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub poll_interval_secs: u64,
+    /// Nerd Font state icons in the `state` column; set false for plain
+    /// terminals — the column falls back to a colored dot.
+    pub icons: bool,
     pub db_path: PathBuf,
     pub sections: Vec<Section>,
     pub theme: Theme,
@@ -18,6 +21,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             poll_interval_secs: 300,
+            icons: true,
             db_path: default_db_path(),
             sections: default_sections(),
             theme: Theme::default(),
@@ -40,6 +44,7 @@ pub struct Section {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Column {
+    State,
     Repo,
     Number,
     Title,
@@ -384,6 +389,7 @@ fn default_sections() -> Vec<Section> {
             title: "Merge Requests".into(),
             query: "is:pr is:open mentions:@me".into(),
             columns: vec![
+                Column::State,
                 Column::Repo,
                 Column::Number,
                 Column::Title,
@@ -405,6 +411,7 @@ fn default_sections() -> Vec<Section> {
 
 fn default_columns() -> Vec<Column> {
     vec![
+        Column::State,
         Column::Repo,
         Column::Number,
         Column::Title,
@@ -755,5 +762,27 @@ filter = { type = "command", command = "jq -r .id" }
         let cfg = parse("[theme]\nfaint = \"gray\"\nstate_open = \"#00ff00\"\n").unwrap();
         assert_eq!(cfg.theme.faint, ThemeColor::Named(NamedColor::Gray));
         assert_eq!(cfg.theme.state_open, ThemeColor::Rgb(0x00, 0xff, 0x00));
+    }
+
+    #[test]
+    fn default_sections_lead_with_state_column_and_icons_on() {
+        let cfg = Config::load_from(Path::new("/nonexistent/config.toml")).unwrap();
+        assert!(cfg.icons);
+        assert_eq!(cfg.sections[0].columns[0], Column::State);
+        assert_eq!(cfg.sections[1].columns[0], Column::State);
+    }
+
+    #[test]
+    fn icons_flag_parses() {
+        let cfg = parse("icons = false\n").unwrap();
+        assert!(!cfg.icons);
+    }
+
+    #[test]
+    fn state_column_parses() {
+        let cfg =
+            parse("[[sections]]\ntitle = \"t\"\nquery = \"q\"\ncolumns = [\"state\", \"title\"]\n")
+                .unwrap();
+        assert_eq!(cfg.sections[0].columns[0], Column::State);
     }
 }
