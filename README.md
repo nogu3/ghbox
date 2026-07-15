@@ -51,7 +51,7 @@ filter = { type = "comment-mention", extra_patterns = ["(?i)ship\\s*it"] }
 [[sections]]
 title = "レビュー依頼"
 query = "is:pr is:open review-requested:@me"
-# filter 省略 = 検索結果そのまま。columns 省略 = ["repo", "number", "title", "author", "updated"]
+# filter 省略 = 検索結果そのまま。columns 省略 = ["state", "repo", "number", "title", "author", "updated"]
 
 [[sections]]
 title = "自分が関わるPR"
@@ -60,10 +60,13 @@ query = "is:pr is:open involves:@me"
 # stdout に残すアイテムの id を1行1個返す。タイムアウト10秒
 filter = { type = "command", command = "jq -r 'select(.pr_author != \"nogu3\") | .id'" }
 
-[theme]                             # 省略キーはデフォルト。ratatui 名前付き色(小文字) or "#rrggbb"
-tab_active = "yellow"               # アクティブタブ・選択マーカー・fetch アイコンの accent 色
-selection_bg = "blue"
-pr_number = "green"                 # PR番号カラム。ほかに author / time カラムも指定可
+icons = true                        # false で Nerd Font アイコンの代わりに ● を表示
+
+[theme]                             # 省略キーはデフォルト(catppuccin mocha)。ratatui 名前付き色(小文字) or "#rrggbb"
+tab_active = "#cba6f7"              # アクティブタブ・タブ下線・選択マーカー・スピナーの accent 色
+selection_bg = "#313244"
+pr_number = "#89b4fa"               # PR番号カラム。ほかに author / time / faint カラム色も指定可
+state_open = "#a6e3a1"              # state カラムのアイコン色: state_draft / state_merged / state_closed も指定可
 
 [keybindings]                       # 省略キーはデフォルト。値は1文字/tab/backtab/enter/up/down/left/right/esc、または配列
 quit = "q"

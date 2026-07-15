@@ -5,6 +5,7 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Cell, HighlightSpacing, Paragraph, Row, Table, TableState};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
 
@@ -20,7 +21,7 @@ pub fn draw(frame: &mut Frame, app: &App, config: &Config, fetching: bool) {
         .split(frame.area());
 
     draw_tabs(frame, app, &config.theme, chunks[0]);
-    draw_rule(frame, &config.theme, chunks[1]);
+    draw_rule(frame, app, &config.theme, chunks[1]);
     draw_table(frame, app, config, chunks[2]);
     draw_status_bar(frame, app, config, fetching, chunks[3]);
 }
@@ -62,7 +63,12 @@ fn draw_tabs(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
         };
         spans.push(Span::styled(s.title.clone(), title_style));
         let count = format!(" {}", s.items.len());
-        spans.push(Span::styled(count, dim));
+        let count_style = if i == app.active {
+            Style::default().fg(color(theme.tab_active))
+        } else {
+            dim
+        };
+        spans.push(Span::styled(count, count_style));
         if i < app.sections.len() - 1 {
             spans.push(Span::styled(" │ ", dim));
         }
@@ -70,11 +76,42 @@ fn draw_tabs(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_rule(frame: &mut Frame, theme: &Theme, area: Rect) {
+/// (x offset, display width) of the active tab's title in the tab line,
+/// mirroring the span layout in `draw_tabs`. Drives the accent underline in
+/// the rule below the tabs.
+fn active_tab_range(app: &App) -> (u16, u16) {
+    let mut x = 1u16; // leading space
+    for (i, s) in app.sections.iter().enumerate() {
+        let title_w = s.title.width() as u16;
+        if i == app.active {
+            return (x, title_w);
+        }
+        let count_w = format!(" {}", s.items.len()).width() as u16;
+        x += title_w + count_w + " │ ".width() as u16;
+    }
+    (0, 0)
+}
+
+fn draw_rule(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) {
     let rule = "─".repeat(area.width as usize);
     frame.render_widget(
         Paragraph::new(rule).style(Style::default().fg(color(theme.border))),
         area,
+    );
+    let (x, w) = active_tab_range(app);
+    if w == 0 || x >= area.width {
+        return;
+    }
+    let w = w.min(area.width - x);
+    let underline = Rect {
+        x: area.x + x,
+        y: area.y,
+        width: w,
+        height: 1,
+    };
+    frame.render_widget(
+        Paragraph::new("━".repeat(w as usize)).style(Style::default().fg(color(theme.tab_active))),
+        underline,
     );
 }
 
@@ -226,8 +263,8 @@ fn draw_table(frame: &mut Frame, app: &App, config: &Config, area: Rect) {
             height: 1,
         };
         frame.render_widget(
-            Paragraph::new("no items")
-                .style(Style::default().fg(Color::DarkGray))
+            Paragraph::new("All clear — no items")
+                .style(Style::default().fg(color(theme.faint)))
                 .alignment(Alignment::Center),
             centered,
         );
@@ -332,7 +369,6 @@ mod tests {
     /// double-width (e.g. CJK) character, so multi-byte text like
     /// "マージ依頼" reads back contiguous instead of space-separated.
     fn buffer_text(terminal: &Terminal<TestBackend>) -> String {
-        use unicode_width::UnicodeWidthStr;
         let buffer = terminal.backend().buffer();
         let area = buffer.area();
         let mut out = String::new();
@@ -447,8 +483,37 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(60, 10)).unwrap();
         terminal.draw(|f| draw(f, &app, &config, false)).unwrap();
         let text = buffer_text(&terminal);
-        assert!(text.contains("no items"), "placeholder for empty section");
+        assert!(
+            text.contains("All clear — no items"),
+            "placeholder for empty section"
+        );
         assert!(!text.contains("REPO"), "header hidden when empty");
+    }
+
+    #[test]
+    fn active_tab_range_accounts_for_cjk_width() {
+        let mut app = App::new(vec!["マージ依頼".into(), "b".into()]);
+        // 先頭タブ: leading space の直後から、表示幅10
+        assert_eq!(active_tab_range(&app), (1, 10));
+        // 2番目: 1 + 10(title) + 2(" 0") + 3(" │ ") = 16
+        app.active = 1;
+        assert_eq!(active_tab_range(&app), (16, 1));
+    }
+
+    #[test]
+    fn rule_underlines_active_tab_in_accent() {
+        let config = Config::default();
+        let titles = config.sections.iter().map(|s| s.title.clone()).collect();
+        let app = App::new(titles);
+        let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
+        terminal.draw(|f| draw(f, &app, &config, false)).unwrap();
+        let buffer = terminal.backend().buffer();
+        // "Merge Requests" は幅14: x=1..=14 が ━ (accent)、その先は ─ (border)
+        assert_eq!(buffer[(1, 1)].symbol(), "━");
+        assert_eq!(buffer[(1, 1)].fg, Color::Rgb(0xcb, 0xa6, 0xf7));
+        assert_eq!(buffer[(14, 1)].symbol(), "━");
+        assert_eq!(buffer[(15, 1)].symbol(), "─");
+        assert_eq!(buffer[(15, 1)].fg, Color::Rgb(0x45, 0x47, 0x5a));
     }
 
     fn epoch(ts: &str) -> i64 {
