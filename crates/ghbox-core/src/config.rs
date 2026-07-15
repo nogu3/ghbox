@@ -193,22 +193,33 @@ pub struct Theme {
     pub pr_number: ThemeColor,
     pub author: ThemeColor,
     pub time: ThemeColor,
+    /// De-emphasized text: repo/comment columns, empty-state placeholder.
+    pub faint: ThemeColor,
+    pub state_open: ThemeColor,
+    pub state_draft: ThemeColor,
+    pub state_merged: ThemeColor,
+    pub state_closed: ThemeColor,
 }
 
 impl Default for Theme {
+    // catppuccin mocha
     fn default() -> Self {
-        use NamedColor::*;
         Self {
-            tab_active: ThemeColor::Named(Yellow),
-            tab_inactive: ThemeColor::Named(DarkGray),
-            border: ThemeColor::Named(DarkGray),
-            selection_bg: ThemeColor::Named(Blue),
-            selection_fg: ThemeColor::Named(White),
-            table_header: ThemeColor::Named(Cyan),
-            status_bar: ThemeColor::Named(DarkGray),
-            pr_number: ThemeColor::Named(Green),
-            author: ThemeColor::Named(Magenta),
-            time: ThemeColor::Named(DarkGray),
+            tab_active: ThemeColor::Rgb(0xcb, 0xa6, 0xf7), // mauve
+            tab_inactive: ThemeColor::Rgb(0x6c, 0x70, 0x86), // overlay0
+            border: ThemeColor::Rgb(0x45, 0x47, 0x5a),     // surface1
+            selection_bg: ThemeColor::Rgb(0x31, 0x32, 0x44), // surface0
+            selection_fg: ThemeColor::Rgb(0xcd, 0xd6, 0xf4), // text
+            table_header: ThemeColor::Rgb(0xb4, 0xbe, 0xfe), // lavender
+            status_bar: ThemeColor::Rgb(0x6c, 0x70, 0x86), // overlay0
+            pr_number: ThemeColor::Rgb(0x89, 0xb4, 0xfa),  // blue
+            author: ThemeColor::Rgb(0xf5, 0xc2, 0xe7),     // pink
+            time: ThemeColor::Rgb(0x7f, 0x84, 0x9c),       // overlay1
+            faint: ThemeColor::Rgb(0x6c, 0x70, 0x86),      // overlay0
+            state_open: ThemeColor::Rgb(0xa6, 0xe3, 0xa1), // green
+            state_draft: ThemeColor::Rgb(0x6c, 0x70, 0x86), // overlay0
+            state_merged: ThemeColor::Rgb(0xcb, 0xa6, 0xf7), // mauve
+            state_closed: ThemeColor::Rgb(0xf3, 0x8b, 0xa8), // red
         }
     }
 }
@@ -614,7 +625,7 @@ filter = { type = "command", command = "jq -r .id" }
         let cfg = parse("[theme]\ntab_active = \"red\"\n").unwrap();
         assert_eq!(cfg.theme.tab_active, ThemeColor::Named(NamedColor::Red));
         // omitted keys keep defaults
-        assert_eq!(cfg.theme.selection_bg, ThemeColor::Named(NamedColor::Blue));
+        assert_eq!(cfg.theme.selection_bg, ThemeColor::Rgb(0x31, 0x32, 0x44));
     }
 
     #[test]
@@ -722,10 +733,27 @@ filter = { type = "command", command = "jq -r .id" }
     #[test]
     fn theme_column_colors_default_and_override() {
         let cfg = parse("").unwrap();
-        assert_eq!(cfg.theme.pr_number, ThemeColor::Named(NamedColor::Green));
-        assert_eq!(cfg.theme.author, ThemeColor::Named(NamedColor::Magenta));
-        assert_eq!(cfg.theme.time, ThemeColor::Named(NamedColor::DarkGray));
+        assert_eq!(cfg.theme.pr_number, ThemeColor::Rgb(0x89, 0xb4, 0xfa));
+        assert_eq!(cfg.theme.author, ThemeColor::Rgb(0xf5, 0xc2, 0xe7));
+        assert_eq!(cfg.theme.time, ThemeColor::Rgb(0x7f, 0x84, 0x9c));
         let cfg = parse("[theme]\npr_number = \"cyan\"\n").unwrap();
         assert_eq!(cfg.theme.pr_number, ThemeColor::Named(NamedColor::Cyan));
+    }
+
+    #[test]
+    fn theme_defaults_are_catppuccin_rgb() {
+        let cfg = parse("").unwrap();
+        assert_eq!(cfg.theme.tab_active, ThemeColor::Rgb(0xcb, 0xa6, 0xf7));
+        assert_eq!(cfg.theme.selection_bg, ThemeColor::Rgb(0x31, 0x32, 0x44));
+        assert_eq!(cfg.theme.faint, ThemeColor::Rgb(0x6c, 0x70, 0x86));
+        assert_eq!(cfg.theme.state_open, ThemeColor::Rgb(0xa6, 0xe3, 0xa1));
+        assert_eq!(cfg.theme.state_merged, ThemeColor::Rgb(0xcb, 0xa6, 0xf7));
+    }
+
+    #[test]
+    fn theme_new_keys_override() {
+        let cfg = parse("[theme]\nfaint = \"gray\"\nstate_open = \"#00ff00\"\n").unwrap();
+        assert_eq!(cfg.theme.faint, ThemeColor::Named(NamedColor::Gray));
+        assert_eq!(cfg.theme.state_open, ThemeColor::Rgb(0x00, 0xff, 0x00));
     }
 }

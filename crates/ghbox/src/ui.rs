@@ -157,11 +157,11 @@ fn cell_text(item: &Item, col: Column, now_epoch: i64) -> String {
     }
 }
 
-/// repo/comment are fixed DarkGray context columns; number/author/time are
+/// repo/comment are de-emphasized via theme.faint; number/author/time are
 /// themeable so users can match their terminal palette.
 fn cell_style(col: Column, theme: &Theme) -> Style {
     match col {
-        Column::Repo | Column::Comment => Style::default().fg(Color::DarkGray),
+        Column::Repo | Column::Comment => Style::default().fg(color(theme.faint)),
         Column::Number => Style::default().fg(color(theme.pr_number)),
         Column::Title => Style::default(),
         Column::Author => Style::default().fg(color(theme.author)),
@@ -276,14 +276,14 @@ fn help_line(kb: &Keybindings) -> String {
 
 fn draw_status_bar(frame: &mut Frame, app: &App, config: &Config, fetching: bool, area: Rect) {
     let theme = &config.theme;
-    let icon = if fetching {
-        spinner_frame(now_millis())
+    let (icon, icon_color) = if fetching {
+        (spinner_frame(now_millis()), color(theme.tab_active))
     } else {
-        "✓"
+        ("✓", color(theme.state_open))
     };
     let line = Line::from(vec![
         Span::raw(" "),
-        Span::styled(icon, Style::default().fg(color(theme.tab_active))),
+        Span::styled(icon, Style::default().fg(icon_color)),
         Span::raw(format!(" {}", app.status)),
         Span::styled(
             format!(" · {}", help_line(&config.keybindings)),
@@ -389,18 +389,22 @@ mod tests {
         let area = *buffer.area();
         let cells = || (0..area.height).flat_map(|y| (0..area.width).map(move |x| (x, y)));
 
-        // マーカーは row_highlight_style の fg に潰されず accent(tab_active=Yellow)を保つ
+        // マーカーは row_highlight_style の fg に潰されず accent(tab_active=mauve)を保つ
         let (mx, my) = cells()
             .find(|&(x, y)| buffer[(x, y)].symbol() == "▌")
             .expect("selection marker cell");
-        assert_eq!(buffer[(mx, my)].fg, Color::Yellow, "marker keeps accent fg");
+        assert_eq!(
+            buffer[(mx, my)].fg,
+            Color::Rgb(0xcb, 0xa6, 0xf7),
+            "marker keeps accent fg"
+        );
         // 選択行本体は selection_fg on selection_bg
         let body = &buffer[(mx + 3, my)];
-        assert_eq!(body.bg, Color::Blue, "selected row bg");
-        assert_eq!(body.fg, Color::White, "selected row fg");
-        // 非選択行の #number セルはカラム色(pr_number=Green)を保つ
+        assert_eq!(body.bg, Color::Rgb(0x31, 0x32, 0x44), "selected row bg");
+        assert_eq!(body.fg, Color::Rgb(0xcd, 0xd6, 0xf4), "selected row fg");
+        // 非選択行の #number セルはカラム色(pr_number=blue)を保つ
         assert!(
-            cells().any(|(x, y)| buffer[(x, y)].fg == Color::Green),
+            cells().any(|(x, y)| buffer[(x, y)].fg == Color::Rgb(0x89, 0xb4, 0xfa)),
             "unselected row keeps column color"
         );
     }
