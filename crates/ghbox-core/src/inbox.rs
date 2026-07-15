@@ -69,6 +69,7 @@ fn pr_item(pr: &PrData) -> Item {
         pr_author: pr.pr_author.clone(),
         pr_updated_at: pr.pr_updated_at.clone(),
         pr_created_at: pr.pr_created_at.clone(),
+        state: pr.state,
         comment: None,
     }
 }
@@ -111,7 +112,7 @@ mod tests {
     use super::*;
     use crate::config::{Column, Section, SectionFilter};
     use crate::github::{Fetched, PrData};
-    use crate::item::CommentInfo;
+    use crate::item::{CommentInfo, PrState};
     use crate::store::KIND_PR;
 
     fn section(filter: SectionFilter) -> Section {
@@ -132,6 +133,7 @@ mod tests {
             pr_author: "author".into(),
             pr_updated_at: updated_at.into(),
             pr_created_at: "2026-01-01T00:00:00Z".into(),
+            state: PrState::Open,
             comments,
         }
     }

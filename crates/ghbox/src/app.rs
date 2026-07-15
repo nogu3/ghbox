@@ -147,6 +147,7 @@ impl App {
 mod tests {
     use super::*;
     use ghbox_core::item::CommentInfo;
+    use ghbox_core::item::PrState;
 
     fn pr_item(number: u64) -> Item {
         Item {
@@ -157,6 +158,7 @@ mod tests {
             pr_author: "a".into(),
             pr_updated_at: "2026-07-02T00:00:00Z".into(),
             pr_created_at: "2026-07-01T00:00:00Z".into(),
+            state: PrState::Open,
             comment: None,
         }
     }

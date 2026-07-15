@@ -296,7 +296,7 @@ fn draw_status_bar(frame: &mut Frame, app: &App, config: &Config, fetching: bool
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ghbox_core::item::CommentInfo;
+    use ghbox_core::item::{CommentInfo, PrState};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -337,6 +337,7 @@ mod tests {
             pr_author: "alice".into(),
             pr_updated_at: "2026-07-12T10:30:00Z".into(),
             pr_created_at: "2026-07-01T00:00:00Z".into(),
+            state: PrState::Open,
             comment: Some(CommentInfo {
                 id: 1,
                 author: "bob".into(),
@@ -380,6 +381,7 @@ mod tests {
                 pr_author: "alice".into(),
                 pr_updated_at: "2026-07-12T10:30:00Z".into(),
                 pr_created_at: "2026-07-01T00:00:00Z".into(),
+                state: PrState::Open,
                 comment: None,
             });
         }

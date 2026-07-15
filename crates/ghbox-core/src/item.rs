@@ -1,5 +1,16 @@
 use serde::Serialize;
 
+/// PR state for the state-icon column. `Draft` is derived at parse time from
+/// GraphQL `state == OPEN && isDraft`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PrState {
+    Open,
+    Draft,
+    Merged,
+    Closed,
+}
+
 /// A single row in a section: a PR (`comment == None`) or a specific comment
 /// on a PR (`comment == Some`, produced by the comment-mention filter).
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -14,6 +25,7 @@ pub struct Item {
     /// ISO8601. Lexicographic order == chronological order.
     pub pr_updated_at: String,
     pub pr_created_at: String,
+    pub state: PrState,
     /// Some only for items produced by the comment-mention filter.
     pub comment: Option<CommentInfo>,
 }
@@ -75,6 +87,7 @@ mod tests {
             pr_author: "alice".into(),
             pr_updated_at: "2026-07-02T00:00:00Z".into(),
             pr_created_at: "2026-07-01T00:00:00Z".into(),
+            state: PrState::Open,
             comment: None,
         }
     }
@@ -119,6 +132,7 @@ mod tests {
         let json = serde_json::to_value(comment_item()).unwrap();
         assert_eq!(json["repo"], "nogu3/hestia");
         assert_eq!(json["pr_number"], 9);
+        assert_eq!(json["state"], "open");
         assert_eq!(json["comment"]["id"], 42);
         assert_eq!(
             serde_json::to_value(pr_item()).unwrap()["comment"],

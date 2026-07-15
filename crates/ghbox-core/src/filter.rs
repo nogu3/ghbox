@@ -241,7 +241,7 @@ mod tests {
 
     use std::time::Duration;
 
-    use crate::item::Item;
+    use crate::item::{Item, PrState};
 
     fn pr_item(repo: &str, number: u64) -> Item {
         Item {
@@ -252,6 +252,7 @@ mod tests {
             pr_author: "a".into(),
             pr_updated_at: "2026-07-02T00:00:00Z".into(),
             pr_created_at: "2026-07-01T00:00:00Z".into(),
+            state: PrState::Open,
             comment: None,
         }
     }

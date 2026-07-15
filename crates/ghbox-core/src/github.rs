@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 
 use crate::config::{Section, SectionFilter};
-use crate::item::CommentInfo;
+use crate::item::{CommentInfo, PrState};
 use crate::{Error, Result};
 
 #[derive(Deserialize)]
@@ -80,6 +80,7 @@ pub struct PrData {
     pub pr_author: String,
     pub pr_updated_at: String,
     pub pr_created_at: String,
+    pub state: PrState,
     /// Populated only for sections whose filter needs comment bodies.
     pub comments: Vec<CommentInfo>,
 }
@@ -104,7 +105,7 @@ pub fn build_query(sections: &[Section]) -> (String, serde_json::Value) {
             ""
         };
         query.push_str(&format!(
-            "  s{i}: search(query: $q{i}, type: ISSUE, first: 50) {{\n    nodes {{\n      ... on PullRequest {{\n        number\n        title\n        url\n        updatedAt\n        createdAt\n        author {{ login }}\n        repository {{ nameWithOwner }}{comments}\n      }}\n    }}\n  }}\n"
+            "  s{i}: search(query: $q{i}, type: ISSUE, first: 50) {{\n    nodes {{\n      ... on PullRequest {{\n        number\n        title\n        url\n        state\n        isDraft\n        updatedAt\n        createdAt\n        author {{ login }}\n        repository {{ nameWithOwner }}{comments}\n      }}\n    }}\n  }}\n"
         ));
     }
     query.push('}');
@@ -137,6 +138,8 @@ struct PrNode {
     url: String,
     updated_at: String,
     created_at: String,
+    state: String,
+    is_draft: bool,
     author: Option<Actor>,
     repository: Option<Repo>,
     comments: CommentConnection,
@@ -227,6 +230,14 @@ pub fn parse_sections(json: &str, section_count: usize) -> Result<Fetched> {
                     })
                 })
                 .collect();
+            // Draft only exists while OPEN; MERGED/CLOSED win regardless of
+            // the flag. Missing `state` (defaulted "") reads as Open.
+            let state = match node.state.as_str() {
+                "MERGED" => PrState::Merged,
+                "CLOSED" => PrState::Closed,
+                _ if node.is_draft => PrState::Draft,
+                _ => PrState::Open,
+            };
             prs.push(PrData {
                 repo: repo.name_with_owner,
                 pr_number: node.number,
@@ -238,6 +249,7 @@ pub fn parse_sections(json: &str, section_count: usize) -> Result<Fetched> {
                     .unwrap_or_else(|| "(unknown)".into()),
                 pr_updated_at: node.updated_at,
                 pr_created_at: node.created_at,
+                state,
                 comments,
             });
         }
@@ -256,6 +268,7 @@ mod tests {
     use super::*;
 
     use crate::config::{Section, SectionFilter};
+    use crate::item::PrState;
 
     fn section(query: &str, filter: SectionFilter) -> Section {
         Section {
@@ -289,6 +302,8 @@ mod tests {
         assert!(comments_pos < query.find("s1:").unwrap());
         assert_eq!(vars["q0"], "is:pr mentions:@me");
         assert_eq!(vars["q1"], "is:pr review-requested:@me");
+        assert!(query.contains("state"), "PR state requested");
+        assert!(query.contains("isDraft"), "draft flag requested");
     }
 
     const SECTIONS_FIXTURE: &str = r#"{
@@ -298,6 +313,7 @@ mod tests {
           "nodes": [
             {
               "number": 9,
+              "state": "OPEN", "isDraft": true,
               "title": "Implement Device List Management",
               "url": "https://github.com/nogu3/hestia/pull/9",
               "updatedAt": "2026-04-20T00:00:00Z",
@@ -327,11 +343,21 @@ mod tests {
           "nodes": [
             {
               "number": 12,
+              "state": "MERGED",
               "title": "Fix logger",
               "url": "https://github.com/nogu3/hestia/pull/12",
               "updatedAt": "2026-07-02T00:00:00Z",
               "createdAt": "2026-07-01T00:00:00Z",
               "author": null,
+              "repository": { "nameWithOwner": "nogu3/hestia" }
+            },
+            {
+              "number": 13,
+              "title": "No state field",
+              "url": "https://github.com/nogu3/hestia/pull/13",
+              "updatedAt": "2026-07-02T00:00:00Z",
+              "createdAt": "2026-07-01T00:00:00Z",
+              "author": { "login": "alice" },
               "repository": { "nameWithOwner": "nogu3/hestia" }
             }
           ]
@@ -355,11 +381,16 @@ mod tests {
         assert_eq!(pr.comments.len(), 1);
         assert_eq!(pr.comments[0].id, 4275373830);
         assert_eq!(pr.comments[0].author, "google-labs-jules");
+        assert_eq!(pr.state, PrState::Draft, "OPEN + isDraft => Draft");
         // section without comments in the query parses with empty comments
+        assert_eq!(fetched.sections[1].len(), 2);
         let rr = &fetched.sections[1][0];
         assert_eq!(rr.pr_number, 12);
         assert_eq!(rr.pr_author, "(unknown)"); // ghost author
         assert!(rr.comments.is_empty());
+        assert_eq!(rr.state, PrState::Merged);
+        // state フィールドが無いレスポンス(古い挙動)は Open に落ちる
+        assert_eq!(fetched.sections[1][1].state, PrState::Open);
     }
 
     #[test]
