@@ -60,7 +60,7 @@ query = "is:pr is:open involves:@me"
 # stdout に残すアイテムの id を1行1個返す。タイムアウト10秒
 filter = { type = "command", command = "jq -r 'select(.pr_author != \"nogu3\") | .id'" }
 
-icons = true                        # false で Nerd Font アイコンの代わりに ● を表示
+icons = true                        # デフォルトの state アイコンは Nerd Font 前提。無い環境は false で ● 表示に
 
 [theme]                             # 省略キーはデフォルト(catppuccin mocha)。ratatui 名前付き色(小文字) or "#rrggbb"
 tab_active = "#cba6f7"              # アクティブタブ・タブ下線・選択マーカー・スピナーの accent 色
