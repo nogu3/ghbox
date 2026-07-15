@@ -118,6 +118,22 @@ fn now_epoch() -> i64 {
         .unwrap_or(0)
 }
 
+/// Braille spinner frames, one per 100ms tick — a full revolution per second.
+const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Frame for a wall-clock time. Stateless: each redraw picks its frame from
+/// the clock, so nothing has to count ticks or carry animation state.
+fn spinner_frame(now_millis: u128) -> &'static str {
+    SPINNER_FRAMES[(now_millis / 100 % SPINNER_FRAMES.len() as u128) as usize]
+}
+
+fn now_millis() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
 fn cell_text(item: &Item, col: Column, now_epoch: i64) -> String {
     match col {
         Column::Repo => item.repo.clone(),
@@ -260,7 +276,11 @@ fn help_line(kb: &Keybindings) -> String {
 
 fn draw_status_bar(frame: &mut Frame, app: &App, config: &Config, fetching: bool, area: Rect) {
     let theme = &config.theme;
-    let icon = if fetching { "⟳" } else { "✓" };
+    let icon = if fetching {
+        spinner_frame(now_millis())
+    } else {
+        "✓"
+    };
     let line = Line::from(vec![
         Span::raw(" "),
         Span::styled(icon, Style::default().fg(color(theme.tab_active))),
@@ -426,6 +446,14 @@ mod tests {
     }
 
     #[test]
+    fn spinner_frame_cycles_every_100ms() {
+        assert_eq!(spinner_frame(0), "⠋");
+        assert_eq!(spinner_frame(100), "⠙");
+        assert_eq!(spinner_frame(950), "⠏");
+        assert_eq!(spinner_frame(1000), "⠋"); // 1秒で一巡
+    }
+
+    #[test]
     fn status_bar_shows_spinner_while_fetching() {
         let config = Config::default();
         let titles = config.sections.iter().map(|s| s.title.clone()).collect();
@@ -434,6 +462,11 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(80, 8)).unwrap();
         terminal.draw(|f| draw(f, &app, &config, true)).unwrap();
         let text = buffer_text(&terminal);
-        assert!(text.contains("⟳ refreshing..."), "fetching icon + status");
+        assert!(
+            SPINNER_FRAMES.iter().any(|f| text.contains(f)),
+            "animated spinner frame in status bar, got: {text}"
+        );
+        assert!(text.contains("refreshing..."), "status text");
+        assert!(!text.contains("⟳"), "static icon replaced by animation");
     }
 }

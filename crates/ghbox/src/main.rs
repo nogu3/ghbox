@@ -69,12 +69,25 @@ fn spawn_fetch(
     if fetching.swap(true, Ordering::SeqCst) {
         return false;
     }
+    // Spinner ticks: the UI redraws only on messages, so while the fetch is
+    // in flight something must pulse the event loop. The task ends itself
+    // when the flag clears — FetchingGuard drops it even on a fetch panic.
+    let tick_tx = tx.clone();
+    let tick_fetching = Arc::clone(fetching);
+    tokio::spawn(async move {
+        while tick_fetching.load(Ordering::SeqCst) {
+            if tick_tx.send(Msg::Redraw).is_err() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    });
     let tx = tx.clone();
     let guard = FetchingGuard(Arc::clone(fetching));
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         let result = handle.block_on(fetch_and_build(&token, &sections, &db_path));
-        // Clear the in-flight flag before notifying the UI so the ⟳ icon is
+        // Clear the in-flight flag before notifying the UI so the spinner is
         // already off when the result is drawn. Unwind still drops the guard.
         drop(guard);
         let _ = tx.send(Msg::Sections(Box::new(result)));
