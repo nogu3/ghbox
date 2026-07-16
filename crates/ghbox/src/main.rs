@@ -95,15 +95,26 @@ fn spawn_fetch(
     true
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // `time` refuses to read the local offset once the process is
+    // multi-threaded (env-var soundness), so capture it before the tokio
+    // runtime spawns its workers. Falls back to UTC if indeterminate.
+    let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to build tokio runtime")?
+        .block_on(async_main(local_offset))
+}
+
+async fn async_main(local_offset: time::UtcOffset) -> Result<()> {
     let config = Config::load().context("failed to load config")?;
     let token = github::get_token().context("failed to get token via `gh auth token`")?;
     let store = Store::open(&config.db_path)
         .with_context(|| format!("failed to open db at {}", config.db_path.display()))?;
 
     let terminal = ratatui::init();
-    let result = run(terminal, config, token, store).await;
+    let result = run(terminal, config, token, store, local_offset).await;
     ratatui::restore();
     result
 }
@@ -113,6 +124,7 @@ async fn run(
     config: Config,
     token: String,
     store: Store,
+    local_offset: time::UtcOffset,
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Msg>();
 
@@ -180,7 +192,7 @@ async fn run(
             Msg::Sections(result) => match *result {
                 Ok((results, api_errors)) => {
                     let filter_error = app.apply_results(results);
-                    app.status = compose_status(now_hms(), filter_error, &api_errors);
+                    app.status = compose_status(now_hms(local_offset), filter_error, &api_errors);
                 }
                 Err(e) => app.status = format!("fetch error: {e}"),
             },
@@ -209,14 +221,14 @@ fn compose_status(hms: String, filter_error: Option<String>, api_errors: &[Strin
     }
 }
 
-/// HH:MM:SS UTC without pulling in chrono (shown next to the ✓ icon).
-fn now_hms() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let (h, m, s) = ((secs / 3600) % 24, (secs / 60) % 60, secs % 60);
-    format!("{h:02}:{m:02}:{s:02}")
+/// HH:MM:SS in the local timezone captured at startup (shown next to the
+/// ✓ icon).
+fn now_hms(offset: time::UtcOffset) -> String {
+    hms(time::OffsetDateTime::now_utc().to_offset(offset))
+}
+
+fn hms(t: time::OffsetDateTime) -> String {
+    format!("{:02}:{:02}:{:02}", t.hour(), t.minute(), t.second())
 }
 
 fn key_matches(spec: KeySpec, code: KeyCode) -> bool {
@@ -242,7 +254,17 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use super::{FetchingGuard, compose_status};
+    use time::{OffsetDateTime, UtcOffset};
+
+    use super::{FetchingGuard, compose_status, hms};
+
+    #[test]
+    fn hms_applies_local_offset() {
+        let epoch = OffsetDateTime::from_unix_timestamp(0).unwrap();
+        let jst = UtcOffset::from_hms(9, 0, 0).unwrap();
+        assert_eq!(hms(epoch.to_offset(jst)), "09:00:00");
+        assert_eq!(hms(epoch), "00:00:00");
+    }
 
     #[test]
     fn fetching_guard_resets_flag_on_drop() {

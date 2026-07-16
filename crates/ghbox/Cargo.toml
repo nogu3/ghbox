@@ -10,6 +10,6 @@ crossterm = "0.29.0"
 ghbox-core = { path = "../ghbox-core" }
 open = "5.3.6"
 ratatui = "0.30.2"
-time = { version = "0.3", features = ["parsing"] }
+time = { version = "0.3", features = ["parsing", "local-offset"] }
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "sync", "time"] }
 unicode-width = "0.2"
