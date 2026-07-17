@@ -249,6 +249,66 @@ fn binding_matches(binding: &KeyBinding, code: KeyCode) -> bool {
     binding.0.iter().any(|spec| key_matches(*spec, code))
 }
 
+fn handle_key(
+    code: KeyCode,
+    app: &mut App,
+    config: &Config,
+    store: &Store,
+    tx: &mpsc::UnboundedSender<Msg>,
+    fetching: &Arc<AtomicBool>,
+    token: &str,
+) {
+    let kb = &config.keybindings;
+    if binding_matches(&kb.quit, code) {
+        app.should_quit = true;
+    } else if binding_matches(&kb.down, code) {
+        app.next();
+    } else if binding_matches(&kb.up, code) {
+        app.prev();
+    } else if binding_matches(&kb.next_section, code) {
+        app.next_section();
+    } else if binding_matches(&kb.prev_section, code) {
+        app.prev_section();
+    } else if binding_matches(&kb.open, code) {
+        if let Some(url) = app.selected_url()
+            && let Err(e) = open::that_detached(url)
+        {
+            app.status = format!("failed to open browser: {e}");
+        }
+    } else if binding_matches(&kb.done, code) {
+        let Some(entry) = app.selected_done_entry() else {
+            return;
+        };
+        let (result, label) = match &entry {
+            DoneEntry::Comment(id) => (
+                store.mark_done(KIND_MERGE_COMMENT, &id.to_string()),
+                id.to_string(),
+            ),
+            DoneEntry::Pr { key, updated_at } => (store.mark_done_pr(key, updated_at), key.clone()),
+        };
+        match result {
+            Ok(()) => {
+                app.remove_selected();
+                app.status = format!("done: {label}");
+            }
+            Err(e) => app.status = format!("db error: {e}"),
+        }
+    } else if binding_matches(&kb.refresh, code) {
+        let spawned = spawn_fetch(
+            tx,
+            fetching,
+            token.to_string(),
+            config.sections.clone(),
+            config.db_path.clone(),
+        );
+        app.status = if spawned {
+            "refreshing...".into()
+        } else {
+            "fetch already in progress".into()
+        };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -321,65 +381,5 @@ mod tests {
             s,
             "filter error: sec: exited with 1 ⚠ API: SAML enforcement"
         );
-    }
-}
-
-fn handle_key(
-    code: KeyCode,
-    app: &mut App,
-    config: &Config,
-    store: &Store,
-    tx: &mpsc::UnboundedSender<Msg>,
-    fetching: &Arc<AtomicBool>,
-    token: &str,
-) {
-    let kb = &config.keybindings;
-    if binding_matches(&kb.quit, code) {
-        app.should_quit = true;
-    } else if binding_matches(&kb.down, code) {
-        app.next();
-    } else if binding_matches(&kb.up, code) {
-        app.prev();
-    } else if binding_matches(&kb.next_section, code) {
-        app.next_section();
-    } else if binding_matches(&kb.prev_section, code) {
-        app.prev_section();
-    } else if binding_matches(&kb.open, code) {
-        if let Some(url) = app.selected_url()
-            && let Err(e) = open::that_detached(url)
-        {
-            app.status = format!("failed to open browser: {e}");
-        }
-    } else if binding_matches(&kb.done, code) {
-        let Some(entry) = app.selected_done_entry() else {
-            return;
-        };
-        let (result, label) = match &entry {
-            DoneEntry::Comment(id) => (
-                store.mark_done(KIND_MERGE_COMMENT, &id.to_string()),
-                id.to_string(),
-            ),
-            DoneEntry::Pr { key, updated_at } => (store.mark_done_pr(key, updated_at), key.clone()),
-        };
-        match result {
-            Ok(()) => {
-                app.remove_selected();
-                app.status = format!("done: {label}");
-            }
-            Err(e) => app.status = format!("db error: {e}"),
-        }
-    } else if binding_matches(&kb.refresh, code) {
-        let spawned = spawn_fetch(
-            tx,
-            fetching,
-            token.to_string(),
-            config.sections.clone(),
-            config.db_path.clone(),
-        );
-        app.status = if spawned {
-            "refreshing...".into()
-        } else {
-            "fetch already in progress".into()
-        };
     }
 }

@@ -635,8 +635,10 @@ mod tests {
 
     #[test]
     fn icons_false_falls_back_to_colored_dot() {
-        let mut config = Config::default();
-        config.icons = false;
+        let config = Config {
+            icons: false,
+            ..Default::default()
+        };
         let titles = config.sections.iter().map(|s| s.title.clone()).collect();
         let mut app = App::new(titles);
         app.sections[0]
