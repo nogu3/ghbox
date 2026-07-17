@@ -50,7 +50,7 @@ pub async fn build_sections(
         items.sort_by(|a, b| {
             a.repo
                 .cmp(&b.repo)
-                .then_with(|| b.sort_time().cmp(a.sort_time()))
+                .then_with(|| b.sort_time(section.sort).cmp(a.sort_time(section.sort)))
         });
         out.push(Ok(SectionData {
             title: section.title.clone(),
@@ -110,7 +110,7 @@ fn exclude_done(items: Vec<Item>, store: &Store) -> Result<Vec<Item>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{Column, Section, SectionFilter};
+    use crate::config::{Column, Section, SectionFilter, SortKey};
     use crate::github::{Fetched, PrData};
     use crate::item::{CommentInfo, PrState};
     use crate::store::KIND_PR;
@@ -121,6 +121,7 @@ mod tests {
             query: "q".into(),
             columns: vec![Column::Repo],
             filter,
+            sort: SortKey::default(),
         }
     }
 
@@ -310,6 +311,66 @@ mod tests {
         assert!(err.contains("sec"), "got: {err}");
         // the other section is unaffected
         assert_eq!(results[1].as_ref().unwrap().items.len(), 1);
+    }
+
+    /// Two PRs whose comment-creation order is the reverse of their PR-update
+    /// order, so the two sort keys produce opposite orderings.
+    fn crossed_comment_fetch() -> Fetched {
+        fetched(vec![vec![
+            pr_data(
+                "o/r",
+                1,
+                "2026-07-05T00:00:00Z",
+                vec![cinfo(1, "bot", "@nogu3 merge", "2026-01-01T00:00:00Z")],
+            ),
+            pr_data(
+                "o/r",
+                2,
+                "2026-07-01T00:00:00Z",
+                vec![cinfo(2, "bot", "@nogu3 merge", "2026-01-10T00:00:00Z")],
+            ),
+        ]])
+    }
+
+    #[tokio::test]
+    async fn comment_items_sort_by_pr_update_by_default() {
+        let store = Store::open_in_memory().unwrap();
+        let sections = [section(SectionFilter::CommentMention {
+            extra_patterns: vec![],
+        })];
+        let results = build_sections(&sections, &crossed_comment_fetch(), &store)
+            .await
+            .unwrap();
+        let numbers: Vec<u64> = results[0]
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.pr_number)
+            .collect();
+        assert_eq!(numbers, vec![1, 2]); // PR #1 updated most recently
+    }
+
+    #[tokio::test]
+    async fn created_sort_key_orders_comment_items_by_comment_creation() {
+        let store = Store::open_in_memory().unwrap();
+        let sections = [Section {
+            sort: SortKey::Created,
+            ..section(SectionFilter::CommentMention {
+                extra_patterns: vec![],
+            })
+        }];
+        let results = build_sections(&sections, &crossed_comment_fetch(), &store)
+            .await
+            .unwrap();
+        let numbers: Vec<u64> = results[0]
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .map(|i| i.pr_number)
+            .collect();
+        assert_eq!(numbers, vec![2, 1]); // comment on PR #2 is newer
     }
 
     #[tokio::test]

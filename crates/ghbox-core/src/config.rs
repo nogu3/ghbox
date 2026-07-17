@@ -39,6 +39,18 @@ pub struct Section {
     pub columns: Vec<Column>,
     #[serde(default)]
     pub filter: SectionFilter,
+    #[serde(default)]
+    pub sort: SortKey,
+}
+
+/// Per-section sort timestamp: PR last update (default) or item creation
+/// (comment creation for comment items, PR creation otherwise).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SortKey {
+    #[default]
+    Updated,
+    Created,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -395,16 +407,19 @@ fn default_sections() -> Vec<Section> {
                 Column::Title,
                 Column::Author,
                 Column::Comment,
+                Column::Updated,
             ],
             filter: SectionFilter::CommentMention {
                 extra_patterns: Vec::new(),
             },
+            sort: SortKey::default(),
         },
         Section {
             title: "Review Requests".into(),
             query: "is:pr is:open review-requested:@me".into(),
             columns: default_columns(),
             filter: SectionFilter::None,
+            sort: SortKey::default(),
         },
     ]
 }
@@ -571,6 +586,35 @@ filter = { type = "command", command = "jq -r .id" }
         );
         // columns omitted → defaults
         assert_eq!(cfg.sections[1].columns, default_columns());
+    }
+
+    #[test]
+    fn default_sections_all_include_updated_column() {
+        for section in default_sections() {
+            assert!(
+                section.columns.contains(&Column::Updated),
+                "section {:?} lacks the updated column",
+                section.title
+            );
+        }
+    }
+
+    #[test]
+    fn sort_omitted_defaults_to_updated() {
+        let cfg = parse("[[sections]]\ntitle = \"t\"\nquery = \"q\"\n").unwrap();
+        assert_eq!(cfg.sections[0].sort, SortKey::Updated);
+    }
+
+    #[test]
+    fn sort_created_parses() {
+        let cfg =
+            parse("[[sections]]\ntitle = \"t\"\nquery = \"q\"\nsort = \"created\"\n").unwrap();
+        assert_eq!(cfg.sections[0].sort, SortKey::Created);
+    }
+
+    #[test]
+    fn unknown_sort_is_error() {
+        assert!(parse("[[sections]]\ntitle = \"t\"\nquery = \"q\"\nsort = \"bogus\"\n").is_err());
     }
 
     #[test]

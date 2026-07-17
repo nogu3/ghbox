@@ -43,18 +43,20 @@ Future: let mando call ghbox-core too (HTTP endpoint or direct dependency).
 3. Apply the per-section filter: none / comment-mention (same comment body contains
    `@viewer` and `(?i)(merge|マージ)` or extra_patterns) / command (pipe JSONL to an
    external command, read back the ids to keep)
-4. Drop done items → sort repo asc, time desc → render as tabs + table
+4. Drop done items → sort repo asc, sort-key time desc → render as tabs + table
 
 ## Sections
 
 Freely defined via `[[sections]]` in config.toml (title + GitHub search query +
-filter + columns). Without a config, two built-in default sections are used
+filter + columns + sort). Without a config, two built-in default sections are used
 (merge requests + review requests).
 
 - Filter types: none / `comment-mention` (same-comment mention+merge; the core
   logic) / `command` (external command; JSONL on stdin, ids to keep on stdout)
 - Columns: `state` / `repo` / `number` / `title` / `author` / `comment` /
   `updated` / `created`
+- Sort: `updated` (default; PR last update) / `created` (comment creation for
+  comment items, PR creation otherwise)
 
 ## Done-state principles
 

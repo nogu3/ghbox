@@ -276,6 +276,7 @@ mod tests {
             query: query.into(),
             columns: vec![],
             filter,
+            sort: crate::config::SortKey::default(),
         }
     }
 

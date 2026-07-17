@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::config::SortKey;
+
 /// PR state for the state-icon column. `Draft` is derived at parse time from
 /// GraphQL `state == OPEN && isDraft`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -55,12 +57,16 @@ impl Item {
         format!("{}#{}", self.repo, self.pr_number)
     }
 
-    /// Sort timestamp: comment items by comment creation, PR items by last
-    /// update.
-    pub fn sort_time(&self) -> &str {
-        match &self.comment {
-            Some(c) => &c.created_at,
-            None => &self.pr_updated_at,
+    /// Sort timestamp for the section's sort key: `updated` is the PR's last
+    /// update for both kinds; `created` is comment creation for comment items
+    /// and PR creation otherwise.
+    pub fn sort_time(&self, key: SortKey) -> &str {
+        match key {
+            SortKey::Updated => &self.pr_updated_at,
+            SortKey::Created => match &self.comment {
+                Some(c) => &c.created_at,
+                None => &self.pr_created_at,
+            },
         }
     }
 
@@ -77,6 +83,7 @@ impl Item {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::SortKey;
 
     fn pr_item() -> Item {
         Item {
@@ -116,9 +123,27 @@ mod tests {
     }
 
     #[test]
-    fn sort_time_follows_item_kind() {
-        assert_eq!(pr_item().sort_time(), "2026-07-02T00:00:00Z");
-        assert_eq!(comment_item().sort_time(), "2026-07-03T00:00:00Z");
+    fn sort_time_updated_uses_pr_update_for_both_kinds() {
+        assert_eq!(
+            pr_item().sort_time(SortKey::Updated),
+            "2026-07-02T00:00:00Z"
+        );
+        assert_eq!(
+            comment_item().sort_time(SortKey::Updated),
+            "2026-07-02T00:00:00Z"
+        );
+    }
+
+    #[test]
+    fn sort_time_created_follows_item_kind() {
+        assert_eq!(
+            pr_item().sort_time(SortKey::Created),
+            "2026-07-01T00:00:00Z"
+        );
+        assert_eq!(
+            comment_item().sort_time(SortKey::Created),
+            "2026-07-03T00:00:00Z"
+        );
     }
 
     #[test]

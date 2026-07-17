@@ -47,8 +47,10 @@ db_path = "/nas/ghbox/state.db"     # done-state DB. Default: $XDG_DATA_HOME/ghb
 [[sections]]
 title = "Merge Requests"
 query = "is:pr is:open mentions:@me"
-columns = ["repo", "number", "title", "author", "comment"]
+columns = ["repo", "number", "title", "author", "comment", "updated"]
 filter = { type = "comment-mention", extra_patterns = ["(?i)ship\\s*it"] }
+# omit sort = "updated" (PR last update). "created" sorts by comment/PR creation instead
+sort = "created"
 
 [[sections]]
 title = "Review Requests"
