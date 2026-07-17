@@ -9,6 +9,8 @@ same-comment condition (`mentions:@me` and `in:comments` each match anywhere in 
 PR), so ghbox fetches comment bodies and filters locally. Merge-keyword matching is
 bilingual out of the box: `(?i)(merge|マージ)`.
 
+![ghbox demo](docs/demo.gif)
+
 ## Install
 
 ```sh
