@@ -1,11 +1,13 @@
 # ghbox
 
-GitHub 上で「ボールが自分にあるPR」を常時表示・操作する TUI。
+A TUI that keeps the PRs where the ball is in your court on screen — and lets you act on them.
 
-同一コメント内に `@自分` と `merge/マージ` の両方を含むマージ依頼と、
-レビュー依頼(`review-requested:@me`)をリポジトリごとに一覧し、
-対応済み管理する。GitHub 検索はこの「同一コメント内」条件を表現できない
-ため、コメント本文を取得してローカルでフィルタする。
+ghbox lists merge requests — comments that contain both an `@mention` of you and a
+merge keyword *in the same comment* — plus review requests (`review-requested:@me`),
+grouped by repository, with done-state tracking. GitHub search cannot express the
+same-comment condition (`mentions:@me` and `in:comments` each match anywhere in the
+PR), so ghbox fetches comment bodies and filters locally. Merge-keyword matching is
+bilingual out of the box: `(?i)(merge|マージ)`.
 
 ## Install
 
@@ -13,7 +15,7 @@ GitHub 上で「ボールが自分にあるPR」を常時表示・操作する T
 cargo install --path crates/ghbox
 ```
 
-認証は `gh auth token` を利用する。事前に `gh auth login` しておくこと。
+Authentication uses `gh auth token`. Run `gh auth login` beforehand.
 
 ## Usage
 
@@ -21,64 +23,68 @@ cargo install --path crates/ghbox
 ghbox
 ```
 
-| キー | 動作 |
+| Key | Action |
 |---|---|
-| ↓ / j | 下移動 |
-| ↑ / k | 上移動 |
-| → / l | 次セクション |
-| ← / h | 前セクション |
-| o | ブラウザでPRを開く |
-| d | 対応済みマーク |
-| r | 手動リフレッシュ |
-| q | 終了 |
+| ↓ / j | Move down |
+| ↑ / k | Move up |
+| → / l | Next section |
+| ← / h | Previous section |
+| o | Open PR in browser |
+| d | Mark as done |
+| r | Manual refresh |
+| q | Quit |
 
-キーは `[keybindings]` でリマップできる(1アクションに複数キーを配列で割り当て可)。
+Keys can be remapped under `[keybindings]` (assign multiple keys to one action with an array).
 
 ## Config
 
-`$XDG_CONFIG_HOME/ghbox/config.toml`(無ければ組み込みデフォルト: マージ依頼 + レビュー依頼の2セクション):
+`$XDG_CONFIG_HOME/ghbox/config.toml` (without one, two built-in default sections are used: merge requests + review requests):
 
 ```toml
-poll_interval_secs = 300            # ポーリング間隔(秒、最小30)
-db_path = "/nas/ghbox/state.db"     # 既読DB。デフォルト: $XDG_DATA_HOME/ghbox/state.db
+poll_interval_secs = 300            # polling interval in seconds (min 30)
+db_path = "/nas/ghbox/state.db"     # done-state DB. Default: $XDG_DATA_HOME/ghbox/state.db
 
 [[sections]]
-title = "マージ依頼"
+title = "Merge Requests"
 query = "is:pr is:open mentions:@me"
 columns = ["repo", "number", "title", "author", "comment"]
 filter = { type = "comment-mention", extra_patterns = ["(?i)ship\\s*it"] }
 
 [[sections]]
-title = "レビュー依頼"
+title = "Review Requests"
 query = "is:pr is:open review-requested:@me"
-# filter 省略 = 検索結果そのまま。columns 省略 = ["state", "repo", "number", "title", "author", "updated"]
+# omit filter = keep search results as-is. omit columns = ["state", "repo", "number", "title", "author", "updated"]
 
 [[sections]]
-title = "自分が関わるPR"
+title = "PRs involving me"
 query = "is:pr is:open involves:@me"
-# 外部コマンドフィルタ: stdin に1行1アイテムの JSON(id フィールド付き)、
-# stdout に残すアイテムの id を1行1個返す。タイムアウト10秒
+# external command filter: receives one JSON object per line on stdin (each with an
+# id field), prints the ids to keep on stdout, one per line. 10s timeout
 filter = { type = "command", command = "jq -r 'select(.pr_author != \"nogu3\") | .id'" }
 
-icons = true                        # デフォルトの state アイコンは Nerd Font 前提。無い環境は false で ● 表示に
+icons = true                        # default state icons require a Nerd Font. Set false for ● fallback
 
-[theme]                             # 省略キーはデフォルト(catppuccin mocha)。ratatui 名前付き色(小文字) or "#rrggbb"
-tab_active = "#cba6f7"              # アクティブタブ・タブ下線・選択マーカー・スピナーの accent 色
+[theme]                             # omitted keys use defaults (catppuccin mocha). ratatui named colors (lowercase) or "#rrggbb"
+tab_active = "#cba6f7"              # accent color: active tab, tab underline, selection marker, spinner
 selection_bg = "#313244"
-pr_number = "#89b4fa"               # PR番号カラム。ほかに author / time / faint カラム色も指定可
-state_open = "#a6e3a1"              # state カラムのアイコン色: state_draft / state_merged / state_closed も指定可
+pr_number = "#89b4fa"               # PR number column. author / time / faint column colors also configurable
+state_open = "#a6e3a1"              # state column icon color: state_draft / state_merged / state_closed too
 
-[keybindings]                       # 省略キーはデフォルト。値は1文字/tab/backtab/enter/up/down/left/right/esc、または配列
+[keybindings]                       # omitted keys use defaults. Values: a single char/tab/backtab/enter/up/down/left/right/esc, or an array
 quit = "q"
 done = "d"
-next_section = ["right", "l"]       # 配列で複数キー割り当て
+next_section = ["right", "l"]       # assign multiple keys with an array
 ```
 
 ## Development
 
 ```sh
-cargo run -p ghbox          # TUI起動
+cargo run -p ghbox          # launch the TUI
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 cargo fmt --all
 ```
+
+## License
+
+MIT
