@@ -6,3 +6,4 @@ members = ["crates/ghbox-core", "crates/ghbox"]
 version = "0.2.0"
 edition = "2024"
 license = "MIT"
+repository = "https://github.com/nogu3/ghbox"

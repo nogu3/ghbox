@@ -3,6 +3,8 @@ name = "ghbox"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "TUI for PRs waiting on you: merge requests detected from same-comment @mention + merge keyword, plus review requests"
 
 [dependencies]
 anyhow = "1.0.103"

@@ -3,6 +3,8 @@ name = "ghbox-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Core library for ghbox: GitHub GraphQL fetch, same-comment mention+merge filtering, SQLite done-state tracking"
 
 [dependencies]
 dirs = "6.0.0"
