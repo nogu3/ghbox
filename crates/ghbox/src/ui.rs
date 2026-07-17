@@ -145,7 +145,7 @@ fn fmt_relative(ts: &str, now_epoch: i64) -> String {
     } else if delta < 30 * 86_400 {
         format!("{}d", delta / 86_400)
     } else {
-        ts[5..10].to_string() // RFC3339パース済みなのでASCII保証
+        ts[5..10].to_string() // already validated as RFC3339, so ASCII is guaranteed
     }
 }
 
@@ -454,7 +454,7 @@ mod tests {
         let area = *buffer.area();
         let cells = || (0..area.height).flat_map(|y| (0..area.width).map(move |x| (x, y)));
 
-        // マーカーは row_highlight_style の fg に潰されず accent(tab_active=mauve)を保つ
+        // the marker keeps the accent (tab_active=mauve) instead of being clobbered by row_highlight_style's fg
         let (mx, my) = cells()
             .find(|&(x, y)| buffer[(x, y)].symbol() == "▌")
             .expect("selection marker cell");
@@ -463,12 +463,12 @@ mod tests {
             Color::Rgb(0xcb, 0xa6, 0xf7),
             "marker keeps accent fg"
         );
-        // 選択行本体は selection_fg on selection_bg
-        // (highlight symbol "▌ " の2桁 + state 列の2桁の先、repo 列の中の "n")
+        // the selected row body renders selection_fg on selection_bg
+        // (past the 2 cells of highlight symbol "▌ " + 2 cells of the state column: the "n" inside the repo column)
         let body = &buffer[(mx + 5, my)];
         assert_eq!(body.bg, Color::Rgb(0x31, 0x32, 0x44), "selected row bg");
         assert_eq!(body.fg, Color::Rgb(0xcd, 0xd6, 0xf4), "selected row fg");
-        // 非選択行の #number セルはカラム色(pr_number=blue)を保つ
+        // #number cells on unselected rows keep their column color (pr_number=blue)
         assert!(
             cells().any(|(x, y)| buffer[(x, y)].fg == Color::Rgb(0x89, 0xb4, 0xfa)),
             "unselected row keeps column color"
@@ -493,9 +493,9 @@ mod tests {
     #[test]
     fn active_tab_range_accounts_for_cjk_width() {
         let mut app = App::new(vec!["マージ依頼".into(), "b".into()]);
-        // 先頭タブ: leading space の直後から、表示幅10
+        // first tab: starts right after the leading space, display width 10
         assert_eq!(active_tab_range(&app), (1, 10));
-        // 2番目: 1 + 10(title) + 2(" 0") + 3(" │ ") = 16
+        // second tab: 1 + 10 (title) + 2 (" 0") + 3 (" │ ") = 16
         app.active = 1;
         assert_eq!(active_tab_range(&app), (16, 1));
     }
@@ -508,7 +508,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(100, 12)).unwrap();
         terminal.draw(|f| draw(f, &app, &config, false)).unwrap();
         let buffer = terminal.backend().buffer();
-        // "Merge Requests" は幅14: x=1..=14 が ━ (accent)、その先は ─ (border)
+        // "Merge Requests" is width 14: x=1..=14 is ━ (accent), everything after is ─ (border)
         assert_eq!(buffer[(1, 1)].symbol(), "━");
         assert_eq!(buffer[(1, 1)].fg, Color::Rgb(0xcb, 0xa6, 0xf7));
         assert_eq!(buffer[(14, 1)].symbol(), "━");
@@ -530,7 +530,7 @@ mod tests {
         assert_eq!(fmt_relative("2026-07-13T07:00:00Z", now), "5h");
         assert_eq!(fmt_relative("2026-07-11T12:00:00Z", now), "2d");
         assert_eq!(fmt_relative("2026-05-01T00:00:00Z", now), "05-01");
-        // クロックスキューで未来になったタイムスタンプは "now" 扱い
+        // timestamps that ended up in the future due to clock skew are treated as "now"
         assert_eq!(fmt_relative("2026-07-14T00:00:00Z", now), "now");
         assert_eq!(fmt_relative("garbage", now), "garbage");
     }
@@ -549,7 +549,7 @@ mod tests {
         assert_eq!(spinner_frame(0), "⠋");
         assert_eq!(spinner_frame(100), "⠙");
         assert_eq!(spinner_frame(950), "⠏");
-        assert_eq!(spinner_frame(1000), "⠋"); // 1秒で一巡
+        assert_eq!(spinner_frame(1000), "⠋"); // one full cycle per second
     }
 
     #[test]
@@ -606,7 +606,7 @@ mod tests {
                 .find(|&(x, y)| buffer[(x, y)].symbol() == glyph)
                 .unwrap_or_else(|| panic!("glyph {glyph:?} not rendered"))
         };
-        // 1行目(選択行)の open アイコンも selection_fg に潰されず状態色を保つ
+        // the open icon on row 1 (the selected row) also keeps its state color instead of selection_fg
         let (x, y) = find("\u{f407}");
         assert_eq!(
             buffer[(x, y)].fg,

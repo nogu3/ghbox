@@ -389,7 +389,7 @@ mod tests {
         assert_eq!(rr.pr_author, "(unknown)"); // ghost author
         assert!(rr.comments.is_empty());
         assert_eq!(rr.state, PrState::Merged);
-        // state フィールドが無いレスポンス(古い挙動)は Open に落ちる
+        // Responses without a state field (old behavior) fall back to Open
         assert_eq!(fetched.sections[1][1].state, PrState::Open);
     }
 
