@@ -1,91 +1,109 @@
 # ghbox
 
-GitHub上で「ボールが自分にあるPR」を常時表示・操作するTUI。
-マージ依頼(コメント内メンション)とレビュー依頼をリポジトリごとに一覧し、既読(対応済み)管理する。
+A TUI that keeps the PRs "where the ball is in your court" on GitHub visible at all times.
+Lists merge requests (in-comment mentions) and review requests per repository, with
+done-state (read) tracking.
 
-## 存在理由
+## Why this exists
 
-GitHub検索は「同一コメント内に @自分 と merge/マージ の両方を含む」という条件を表現できない(`mentions:@me` と `in:comments` は各々PR内のどこかでマッチすれば良いため)。この同一コメント内フィルタが本ツールのコアロジック。
+GitHub search cannot express "a single comment containing both @me and merge/マージ"
+(`mentions:@me` and `in:comments` each match anywhere in the PR). This same-comment
+filter is the core logic of this tool.
 
-## アーキテクチャ
+## Architecture
 
-casa/casad パターン踏襲。コアをlibに分離し、frontendを差し替え可能にする。
+Follows the casa/casad pattern: core split into a lib, frontend swappable.
 
 ```
 ghbox/
 ├── crates/
-│   ├── ghbox-core/   # GraphQL fetch、コメントフィルタ、型、SQLite状態管理
+│   ├── ghbox-core/   # GraphQL fetch, comment filter, types, SQLite state
 │   └── ghbox/        # ratatui TUI frontend
 └── CLAUDE.md
 ```
 
-将来: mando からも ghbox-core を叩けるようにする(HTTPエンドポイント or 直接依存)。
+Future: let mando call ghbox-core too (HTTP endpoint or direct dependency).
 
-## 技術スタック
+## Tech stack
 
 - Rust (edition 2024)
 - ratatui + crossterm
-- tokio(バックグラウンド定期fetch)
+- tokio (periodic background fetch)
 - reqwest + GitHub GraphQL API v4
-- rusqlite(既読状態。DBはNAS上に置きマシン間同期: schliemann-drill と同じ方式)
-- 認証: `gh auth token` の出力を利用。トークンを自前管理しない
+- rusqlite (done state. DB lives on the NAS, synced across machines — same
+  approach as schliemann-drill)
+- Auth: output of `gh auth token`. No token management of our own
 
-## データフロー
+## Data flow
 
-1. config の各セクションから GraphQL search を alias(s0, s1, ...)で並べた1クエリを動的組み立てし、`viewer { login }` と合わせて1リクエストで取得(検索文字列は variables で渡す)
-2. comment-mention フィルタを持つセクションのみ `comments(last: 50)` を追加取得
-3. セクションごとにフィルタ適用: なし / comment-mention(同一コメント本文内に `@viewer` と `(?i)(merge|マージ)` または extra_patterns) / command(外部コマンドに JSONL を渡し残す id を受け取る)
-4. 既読除外 → repo 昇順・時刻降順ソート → タブ+テーブルで表示
+1. Build one GraphQL query dynamically from the config sections, with each GraphQL
+   search aliased (s0, s1, ...), plus `viewer { login }` — a single request
+   (search strings passed as variables)
+2. Only sections with a comment-mention filter additionally fetch `comments(last: 50)`
+3. Apply the per-section filter: none / comment-mention (same comment body contains
+   `@viewer` and `(?i)(merge|マージ)` or extra_patterns) / command (pipe JSONL to an
+   external command, read back the ids to keep)
+4. Drop done items → sort repo asc, time desc → render as tabs + table
 
-## セクション
+## Sections
 
-config.toml の `[[sections]]` で自由定義(タイトル + GitHub 検索クエリ + フィルタ + カラム)。
-config がなければ組み込みデフォルト2セクション(マージ依頼 + レビュー依頼)で動作する。
+Freely defined via `[[sections]]` in config.toml (title + GitHub search query +
+filter + columns). Without a config, two built-in default sections are used
+(merge requests + review requests).
 
-- フィルタ種別: なし / `comment-mention`(同一コメント内 mention+merge。コアロジック) / `command`(外部コマンド。stdin に JSONL、stdout に残す id)
-- カラム: `state` / `repo` / `number` / `title` / `author` / `comment` / `updated` / `created`
+- Filter types: none / `comment-mention` (same-comment mention+merge; the core
+  logic) / `command` (external command; JSONL on stdin, ids to keep on stdout)
+- Columns: `state` / `repo` / `number` / `title` / `author` / `comment` /
+  `updated` / `created`
 
-## 既読管理の原則
+## Done-state principles
 
-- コメントアイテム: **コメントID単位**(kind=`merge_comment`)。同一PRに新しい依頼コメントが来たら再浮上する
-- PRアイテム: **PR + updatedAt 単位**(kind=`pr`、upsert)。マーク後に PR が更新されたら再浮上する
-- 既読はセクション横断でグローバル(既読キーはアイテム自体から導出)
-- SQLiteスキーマ変更時はマイグレーションを書く(append-only。NAS上のDBを壊さない)。DB の user_version がバイナリより新しい場合は起動拒否
+- Comment items: keyed **per comment ID** (kind=`merge_comment`). A new request
+  comment on the same PR resurfaces it
+- PR items: keyed **per PR + updatedAt** (kind=`pr`, upsert). A PR updated after
+  being marked resurfaces
+- Done state is global across sections (the key derives from the item itself)
+- Write a migration for any SQLite schema change (append-only; never break the DB
+  on the NAS). Refuse to start if the DB user_version is newer than the binary
 
-## キーバインド(デフォルト、config でリマップ可)
+## Keybindings (defaults, remappable via config)
 
-| キー | アクション | 動作 |
+| Key | Action | Behavior |
 |---|---|---|
-| ↓ / j | down | 下移動 |
-| ↑ / k | up | 上移動 |
-| → / l | next_section | 次セクション |
-| ← / h | prev_section | 前セクション |
-| o | open | ブラウザでPRを開く |
-| d | done | 対応済みマーク |
-| r | refresh | 手動リフレッシュ |
-| q | quit | 終了 |
+| ↓ / j | down | Move down |
+| ↑ / k | up | Move up |
+| → / l | next_section | Next section |
+| ← / h | prev_section | Previous section |
+| o | open | Open PR in browser |
+| d | done | Mark as done |
+| r | refresh | Manual refresh |
+| q | quit | Quit |
 
-## 開発コマンド
+## Development commands
 
 ```sh
-cargo run -p ghbox          # TUI起動
+cargo run -p ghbox          # launch the TUI
 cargo test --workspace
 cargo clippy --workspace -- -D warnings
 cargo fmt --all
 ```
 
-## 規約
+## Conventions
 
-- UNIX哲学: ghbox-core は副作用(端末描画)を持たない。TUIは表示と入力のみ
-- エラーは anyhow(バイナリ) / thiserror(lib)
-- GraphQLクエリは .graphql ファイルに分離せず、まずは文字列リテラルで開始(小さく始める)
-- 設定ファイルは `$XDG_CONFIG_HOME/ghbox/config.toml`(sections / theme / keybindings / ポーリング間隔 / DB パス。`deny_unknown_fields` で typo 検出、不正 config は起動時に即エラー終了)
-- コミットメッセージは英語、conventional commits
+- UNIX philosophy: ghbox-core has no side effects (no terminal drawing). The TUI
+  does display and input only
+- Errors: anyhow (binary) / thiserror (lib)
+- GraphQL queries stay as string literals, not separate .graphql files (start small)
+- Config file: `$XDG_CONFIG_HOME/ghbox/config.toml` (sections / theme / keybindings /
+  poll interval / DB path. `deny_unknown_fields` catches typos; an invalid config
+  fails fast at startup)
+- Commit messages in English, conventional commits
 
-## 未確定事項(実装しながら決める)
+## Open questions (decide while implementing)
 
-- [ ] GraphQL search でコメント本文まで一発取得できるか、レート制限に収まるか(最初に素振りで確認)
-- [ ] マージ依頼の検索対象を open のみにするか merged 含むか
-- [ ] review thread 内コメント(PullRequestReviewComment)も対象にするか、issue comment のみか
-- [ ] ポーリング間隔のデフォルト(案: 5分)
-- [ ] NAS上のSQLiteパス
+- [ ] Can GraphQL search fetch comment bodies in one shot, and does it fit rate
+      limits? (validate with a spike first)
+- [ ] Search merge requests in open PRs only, or include merged?
+- [ ] Include review thread comments (PullRequestReviewComment), or issue comments only?
+- [ ] Default polling interval (proposal: 5 min)
+- [ ] SQLite path on the NAS
