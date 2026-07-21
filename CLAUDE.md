@@ -52,7 +52,9 @@ filter + columns + sort). Without a config, two built-in default sections are us
 (merge requests + review requests).
 
 - Filter types: none / `comment-mention` (same-comment mention+merge; the core
-  logic) / `command` (external command; JSONL on stdin, ids to keep on stdout)
+  logic; `include_own = true` also surfaces the viewer's own comments, for
+  memos to self) / `command` (external command; JSONL on stdin, ids to keep
+  on stdout)
 - Columns: `state` / `repo` / `number` / `title` / `author` / `comment` /
   `updated` / `created`
 - Sort: `updated` (default; PR last update) / `created` (comment creation for
