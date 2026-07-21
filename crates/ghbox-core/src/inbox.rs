@@ -28,7 +28,7 @@ pub async fn build_sections(
     for (section, prs) in sections.iter().zip(&fetched.sections) {
         let items = match &section.filter {
             SectionFilter::None => prs.iter().map(pr_item).collect(),
-            SectionFilter::CommentMention { extra_patterns } => {
+            SectionFilter::CommentMention { extra_patterns, .. } => {
                 let filter = CommentFilter::new(&fetched.viewer_login, extra_patterns)?;
                 comment_items(prs, &filter, &fetched.viewer_login)
             }
@@ -197,6 +197,7 @@ mod tests {
         let results = build_sections(
             &[section(SectionFilter::CommentMention {
                 extra_patterns: vec![],
+                include_own: false,
             })],
             &f,
             &store,
@@ -229,6 +230,7 @@ mod tests {
         let results = build_sections(
             &[section(SectionFilter::CommentMention {
                 extra_patterns: vec![],
+                include_own: false,
             })],
             &f,
             &store,
@@ -337,6 +339,7 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let sections = [section(SectionFilter::CommentMention {
             extra_patterns: vec![],
+            include_own: false,
         })];
         let results = build_sections(&sections, &crossed_comment_fetch(), &store)
             .await
@@ -358,6 +361,7 @@ mod tests {
             sort: SortKey::Created,
             ..section(SectionFilter::CommentMention {
                 extra_patterns: vec![],
+                include_own: false,
             })
         }];
         let results = build_sections(&sections, &crossed_comment_fetch(), &store)

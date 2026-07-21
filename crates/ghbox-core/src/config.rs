@@ -76,6 +76,7 @@ pub enum SectionFilter {
     None,
     CommentMention {
         extra_patterns: Vec<String>,
+        include_own: bool,
     },
     Command {
         command: String,
@@ -88,6 +89,7 @@ struct FilterSpec {
     #[serde(rename = "type")]
     kind: String,
     extra_patterns: Option<Vec<String>>,
+    include_own: Option<bool>,
     command: Option<String>,
 }
 
@@ -97,7 +99,10 @@ impl TryFrom<FilterSpec> for SectionFilter {
     fn try_from(spec: FilterSpec) -> std::result::Result<Self, String> {
         match spec.kind.as_str() {
             "none" => {
-                if spec.extra_patterns.is_some() || spec.command.is_some() {
+                if spec.extra_patterns.is_some()
+                    || spec.command.is_some()
+                    || spec.include_own.is_some()
+                {
                     return Err("filter type \"none\" takes no other keys".into());
                 }
                 Ok(SectionFilter::None)
@@ -108,11 +113,15 @@ impl TryFrom<FilterSpec> for SectionFilter {
                 }
                 Ok(SectionFilter::CommentMention {
                     extra_patterns: spec.extra_patterns.unwrap_or_default(),
+                    include_own: spec.include_own.unwrap_or(false),
                 })
             }
             "command" => {
                 if spec.extra_patterns.is_some() {
                     return Err("filter type \"command\" does not take `extra_patterns`".into());
+                }
+                if spec.include_own.is_some() {
+                    return Err("filter type \"command\" does not take `include_own`".into());
                 }
                 let command = spec
                     .command
@@ -411,6 +420,7 @@ fn default_sections() -> Vec<Section> {
             ],
             filter: SectionFilter::CommentMention {
                 extra_patterns: Vec::new(),
+                include_own: false,
             },
             sort: SortKey::default(),
         },
@@ -479,7 +489,7 @@ impl Config {
             ));
         }
         for section in &self.sections {
-            if let SectionFilter::CommentMention { extra_patterns } = &section.filter {
+            if let SectionFilter::CommentMention { extra_patterns, .. } = &section.filter {
                 for pattern in extra_patterns {
                     regex::Regex::new(pattern).map_err(|e| {
                         Error::Config(format!(
@@ -575,7 +585,8 @@ filter = { type = "command", command = "jq -r .id" }
         assert_eq!(
             cfg.sections[0].filter,
             SectionFilter::CommentMention {
-                extra_patterns: vec!["(?i)ship\\s*it".into()]
+                extra_patterns: vec!["(?i)ship\\s*it".into()],
+                include_own: false,
             }
         );
         assert_eq!(
@@ -643,6 +654,52 @@ filter = { type = "command", command = "jq -r .id" }
             "[[sections]]\ntitle = \"t\"\nquery = \"q\"\nfilter = { type = \"comment-mention\", command = \"x\" }\n",
         );
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn include_own_parses() {
+        let cfg = parse(
+            "[[sections]]\ntitle = \"t\"\nquery = \"q\"\nfilter = { type = \"comment-mention\", include_own = true }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.sections[0].filter,
+            SectionFilter::CommentMention {
+                extra_patterns: vec![],
+                include_own: true,
+            }
+        );
+    }
+
+    #[test]
+    fn include_own_omitted_defaults_to_false() {
+        let cfg = parse(
+            "[[sections]]\ntitle = \"t\"\nquery = \"q\"\nfilter = { type = \"comment-mention\" }\n",
+        )
+        .unwrap();
+        assert_eq!(
+            cfg.sections[0].filter,
+            SectionFilter::CommentMention {
+                extra_patterns: vec![],
+                include_own: false,
+            }
+        );
+    }
+
+    #[test]
+    fn include_own_on_other_filter_types_is_error() {
+        assert!(
+            parse(
+                "[[sections]]\ntitle = \"t\"\nquery = \"q\"\nfilter = { type = \"none\", include_own = true }\n"
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "[[sections]]\ntitle = \"t\"\nquery = \"q\"\nfilter = { type = \"command\", command = \"x\", include_own = true }\n"
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -287,6 +287,7 @@ mod tests {
                 "is:pr mentions:@me",
                 SectionFilter::CommentMention {
                     extra_patterns: vec![],
+                    include_own: false,
                 },
             ),
             section("is:pr review-requested:@me", SectionFilter::None),
