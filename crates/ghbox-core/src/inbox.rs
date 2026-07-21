@@ -28,9 +28,12 @@ pub async fn build_sections(
     for (section, prs) in sections.iter().zip(&fetched.sections) {
         let items = match &section.filter {
             SectionFilter::None => prs.iter().map(pr_item).collect(),
-            SectionFilter::CommentMention { extra_patterns, .. } => {
+            SectionFilter::CommentMention {
+                extra_patterns,
+                include_own,
+            } => {
                 let filter = CommentFilter::new(&fetched.viewer_login, extra_patterns)?;
-                comment_items(prs, &filter, &fetched.viewer_login)
+                comment_items(prs, &filter, &fetched.viewer_login, *include_own)
             }
             SectionFilter::Command { command } => {
                 let candidates: Vec<Item> = prs.iter().map(pr_item).collect();
@@ -74,11 +77,16 @@ fn pr_item(pr: &PrData) -> Item {
     }
 }
 
-fn comment_items(prs: &[PrData], filter: &CommentFilter, viewer: &str) -> Vec<Item> {
+fn comment_items(
+    prs: &[PrData],
+    filter: &CommentFilter,
+    viewer: &str,
+    include_own: bool,
+) -> Vec<Item> {
     let mut items = Vec::new();
     for pr in prs {
         for comment in &pr.comments {
-            if comment.author == viewer {
+            if !include_own && comment.author == viewer {
                 continue; // own comments are not requests to me
             }
             if !filter.is_merge_request(&comment.body) {
@@ -212,6 +220,43 @@ mod tests {
             .collect();
         ids.sort();
         assert_eq!(ids, vec![1, 2]);
+    }
+    #[tokio::test]
+    async fn include_own_surfaces_viewers_own_memo_comment() {
+        let store = Store::open_in_memory().unwrap();
+        let f = fetched(vec![vec![pr_data(
+            "o/r",
+            1,
+            "2026-07-02T00:00:00Z",
+            vec![
+                cinfo(
+                    1,
+                    "nogu3",
+                    "@nogu3 merge memo to self",
+                    "2026-01-01T00:00:00Z",
+                ),
+                cinfo(2, "nogu3", "just chatting", "2026-01-02T00:00:00Z"),
+                cinfo(3, "bot", "@nogu3 merge please", "2026-01-03T00:00:00Z"),
+            ],
+        )]]);
+        let results = build_sections(
+            &[section(SectionFilter::CommentMention {
+                extra_patterns: vec![],
+                include_own: true,
+            })],
+            &f,
+            &store,
+        )
+        .await
+        .unwrap();
+        let items = &results[0].as_ref().unwrap().items;
+        // own memo (1) and bot request (3) surface; non-matching own comment (2) does not
+        let mut ids: Vec<i64> = items
+            .iter()
+            .map(|i| i.comment.as_ref().unwrap().id)
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec![1, 3]);
     }
 
     #[tokio::test]
