@@ -35,6 +35,15 @@ pub async fn build_sections(
                 let filter = CommentFilter::new(&fetched.viewer_login, extra_patterns)?;
                 comment_items(prs, &filter, &fetched.viewer_login, *include_own)
             }
+            SectionFilter::ReviewRequested => prs
+                .iter()
+                .filter(|pr| {
+                    pr.review_requested
+                        .iter()
+                        .any(|login| login == &fetched.viewer_login)
+                })
+                .map(pr_item)
+                .collect(),
             SectionFilter::Command { command } => {
                 let candidates: Vec<Item> = prs.iter().map(pr_item).collect();
                 match run_command_filter(command, &candidates).await {
@@ -444,5 +453,23 @@ mod tests {
             .map(|i| i.pr_number)
             .collect();
         assert_eq!(numbers, vec![3, 2, 1]); // a/repo newest first, then z/repo
+    }
+
+    #[tokio::test]
+    async fn review_requested_filter_keeps_only_viewer_requested_prs() {
+        let store = Store::open_in_memory().unwrap();
+        let mut requested = pr_data("o/r", 1, "2026-07-02T00:00:00Z", vec![]);
+        requested.review_requested = vec!["nogu3".into()];
+        let mut other = pr_data("o/r", 2, "2026-07-02T00:00:00Z", vec![]);
+        other.review_requested = vec!["alice".into()];
+        let nobody = pr_data("o/r", 3, "2026-07-02T00:00:00Z", vec![]);
+        let f = fetched(vec![vec![requested, other, nobody]]);
+        let results = build_sections(&[section(SectionFilter::ReviewRequested)], &f, &store)
+            .await
+            .unwrap();
+        let items = &results[0].as_ref().unwrap().items;
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].pr_number, 1);
+        assert!(items[0].comment.is_none(), "PR item, not comment item");
     }
 }

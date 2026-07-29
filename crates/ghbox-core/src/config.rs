@@ -83,6 +83,7 @@ pub enum SectionFilter {
         extra_patterns: Vec<String>,
         include_own: bool,
     },
+    ReviewRequested,
     Command {
         command: String,
     },
@@ -121,6 +122,15 @@ impl TryFrom<FilterSpec> for SectionFilter {
                     include_own: spec.include_own.unwrap_or(false),
                 })
             }
+            "review-requested" => {
+                if spec.extra_patterns.is_some()
+                    || spec.command.is_some()
+                    || spec.include_own.is_some()
+                {
+                    return Err("filter type \"review-requested\" takes no other keys".into());
+                }
+                Ok(SectionFilter::ReviewRequested)
+            }
             "command" => {
                 if spec.extra_patterns.is_some() {
                     return Err("filter type \"command\" does not take `extra_patterns`".into());
@@ -134,7 +144,7 @@ impl TryFrom<FilterSpec> for SectionFilter {
                 Ok(SectionFilter::Command { command })
             }
             other => Err(format!(
-                "unknown filter type {other:?} (expected \"none\", \"comment-mention\", or \"command\")"
+                "unknown filter type {other:?} (expected \"none\", \"comment-mention\", \"review-requested\", or \"command\")"
             )),
         }
     }
@@ -959,6 +969,29 @@ filter = { type = "command", command = "jq -r .id" }
         for bad in ["owner", "owner/", "/name", "a/b/c", "a b/c", "a\"b/c"] {
             let toml = format!("[[sections]]\ntitle = \"t\"\nrepos = [{bad:?}]\n");
             assert!(parse(&toml).is_err(), "{bad:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn review_requested_filter_parses() {
+        let cfg = parse(
+            "[[sections]]\ntitle = \"t\"\nrepos = [\"o/r\"]\nfilter = { type = \"review-requested\" }\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.sections[0].filter, SectionFilter::ReviewRequested);
+    }
+
+    #[test]
+    fn review_requested_filter_rejects_other_keys() {
+        for extra in [
+            "extra_patterns = [\"x\"]",
+            "include_own = true",
+            "command = \"x\"",
+        ] {
+            let toml = format!(
+                "[[sections]]\ntitle = \"t\"\nquery = \"q\"\nfilter = {{ type = \"review-requested\", {extra} }}\n"
+            );
+            assert!(parse(&toml).is_err(), "{extra} should be rejected");
         }
     }
 }

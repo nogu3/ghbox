@@ -141,8 +141,13 @@ pub fn build_query(sections: &[Section]) -> (String, serde_json::Value) {
         } else {
             ""
         };
+        let review_requests = if matches!(section.filter, SectionFilter::ReviewRequested) {
+            "\n        reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }"
+        } else {
+            ""
+        };
         query.push_str(&format!(
-            "  s{i}: search(query: $q{i}, type: ISSUE, first: 50) {{\n    nodes {{\n      ... on PullRequest {{\n        number\n        title\n        url\n        state\n        isDraft\n        updatedAt\n        createdAt\n        author {{ login }}\n        repository {{ nameWithOwner }}{comments}\n      }}\n    }}\n  }}\n"
+            "  s{i}: search(query: $q{i}, type: ISSUE, first: 50) {{\n    nodes {{\n      ... on PullRequest {{\n        number\n        title\n        url\n        state\n        isDraft\n        updatedAt\n        createdAt\n        author {{ login }}\n        repository {{ nameWithOwner }}{comments}{review_requests}\n      }}\n    }}\n  }}\n"
         ));
     }
     query.push('}');
@@ -362,6 +367,18 @@ mod tests {
         assert_eq!(vars["q1"], "is:pr review-requested:@me");
         assert!(query.contains("state"), "PR state requested");
         assert!(query.contains("isDraft"), "draft flag requested");
+    }
+
+    #[test]
+    fn build_query_requests_review_requests_only_for_review_requested_sections() {
+        let sections = vec![
+            section("is:pr review-requested:@me", SectionFilter::ReviewRequested),
+            section("is:pr mentions:@me", SectionFilter::None),
+        ];
+        let (query, _) = build_query(&sections);
+        assert_eq!(query.matches("reviewRequests(first: 20)").count(), 1);
+        let pos = query.find("reviewRequests(first: 20)").unwrap();
+        assert!(query.find("s0:").unwrap() < pos && pos < query.find("s1:").unwrap());
     }
 
     const SECTIONS_FIXTURE: &str = r#"{
