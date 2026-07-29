@@ -36,24 +36,42 @@ Future: let mando call ghbox-core too (HTTP endpoint or direct dependency).
 
 ## Data flow
 
-1. Build one GraphQL query dynamically from the config sections, with each GraphQL
-   search aliased (s0, s1, ...), plus `viewer { login }` — a single request
+1. Build one GraphQL request for the sections with a `query`: each search aliased
+   (s0, s1, ...) plus `viewer { login }`; comment-mention sections additionally
+   request `comments(last: 50)`, review-requested sections request `reviewRequests`
    (search strings passed as variables)
-2. Only sections with a comment-mention filter additionally fetch `comments(last: 50)`
-3. Apply the per-section filter: none / comment-mention (same comment body contains
-   `@viewer` and `(?i)(merge|マージ)` or extra_patterns) / command (pipe JSONL to an
-   external command, read back the ids to keep)
-4. Drop done items → sort repo asc, sort-key time desc → render as tabs + table
+2. Separately enumerate every unique repo named in a `repos` list: one paginated
+   GraphQL request per repo, open PRs only — immune to search-index lag
+3. Per section, merge candidates = its search matches ∪ its repos' enumerated PRs,
+   deduped by repo+PR number (the search entry wins, since it may already carry
+   comments)
+4. Comment-mention sections: PRs still missing comments (enumeration-only) are
+   diff-fetched in a batch request. An in-memory cache keyed by PR `updatedAt`,
+   held across polls, means steady-state polls only refetch PRs whose `updatedAt`
+   moved
+5. Apply the per-section filter: none / comment-mention (same comment body contains
+   `@viewer` and `(?i)(merge|マージ)` or extra_patterns) / review-requested (open
+   PRs where the viewer is still a requested *user* reviewer — team review
+   requests are not matched) / command (pipe JSONL to an external command, read
+   back the ids to keep)
+6. Drop done items → sort repo asc, sort-key time desc → render as tabs + table
 
 ## Sections
 
-Freely defined via `[[sections]]` in config.toml (title + GitHub search query +
-filter + columns + sort). Without a config, two built-in default sections are used
+Freely defined via `[[sections]]` in config.toml (title + source(s) + filter +
+columns + sort). Without a config, two built-in default sections are used
 (merge requests + review requests).
 
+- Source: `query` (GitHub search string) and/or `repos` (`["owner/name", ...]`,
+  direct open-PR enumeration); at least one is required, both = union deduped by
+  PR. `repos` is immune to search-index lag — recommended for "ball is in your
+  court" sections over known repos; keep `query` for broad discovery
 - Filter types: none / `comment-mention` (same-comment mention+merge; the core
   logic; `include_own = true` also surfaces the viewer's own comments, for
-  memos to self) / `command` (external command; JSONL on stdin, ids to keep
+  memos to self) / `review-requested` (open PRs where the viewer is still a
+  requested reviewer; user reviewers only — team review requests are not
+  matched, so keep a `query` source with `review-requested:@me` if you rely on
+  those) / `command` (external command; JSONL on stdin, ids to keep
   on stdout)
 - Columns: `state` / `repo` / `number` / `title` / `author` / `comment` /
   `updated` / `created`

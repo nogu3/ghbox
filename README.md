@@ -42,6 +42,12 @@ Keys can be remapped under `[keybindings]` (assign multiple keys to one action w
 
 `$XDG_CONFIG_HOME/ghbox/config.toml` (without one, two built-in default sections are used: merge requests + review requests):
 
+Each section needs at least one of `query` (a GitHub search string) or `repos`
+(`["owner/name", ...]`, enumerating those repos' open PRs directly); both together
+union the results, deduped by PR. `repos` is immune to GitHub search-index lag —
+recommended for "ball is in your court" sections over repos you already know, while
+`query` stays useful for broader discovery.
+
 ```toml
 poll_interval_secs = 300            # polling interval in seconds (min 30)
 db_path = "/nas/ghbox/state.db"     # done-state DB. Default: $XDG_DATA_HOME/ghbox/state.db
@@ -59,6 +65,18 @@ sort = "created"
 title = "Review Requests"
 query = "is:pr is:open review-requested:@me"
 # omit filter = keep search results as-is. omit columns = ["state", "repo", "number", "title", "author", "updated"]
+
+[[sections]]
+title = "Merge Requests (big-repo)"
+repos = ["myorg/big-repo"]           # direct enumeration instead of query — no index lag
+filter = { type = "comment-mention" }
+
+[[sections]]
+title = "Review Requests (big-repo)"
+repos = ["myorg/big-repo"]
+# keeps PRs where you're still a requested *user* reviewer. Team review requests
+# aren't matched — use a query source with review-requested:@me if you rely on those
+filter = { type = "review-requested" }
 
 [[sections]]
 title = "PRs involving me"
