@@ -3,6 +3,7 @@
 
 pub mod config;
 mod error;
+pub mod fetcher;
 pub mod filter;
 pub mod github;
 pub mod inbox;

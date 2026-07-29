@@ -1,7 +1,7 @@
 use crate::Result;
 use crate::config::{Section, SectionFilter};
 use crate::filter::{CommentFilter, run_command_filter};
-use crate::github::{Fetched, PrData};
+use crate::github::PrData;
 use crate::item::Item;
 use crate::store::{KIND_MERGE_COMMENT, Store};
 
@@ -17,30 +17,37 @@ pub struct SectionData {
 /// section would falsely read as "all clear").
 pub type SectionResult = std::result::Result<SectionData, String>;
 
-/// filter → read-state exclusion → sort, per section. `fetched.sections`
+/// filter → read-state exclusion → sort, per section. `outcome.sections`
 /// must be parallel to `sections`.
 pub async fn build_sections(
     sections: &[Section],
-    fetched: &Fetched,
+    outcome: &crate::fetcher::FetchOutcome,
     store: &Store,
 ) -> Result<Vec<SectionResult>> {
     let mut out = Vec::with_capacity(sections.len());
-    for (section, prs) in sections.iter().zip(&fetched.sections) {
+    for (section, fetched_prs) in sections.iter().zip(&outcome.sections) {
+        let prs = match fetched_prs {
+            Ok(prs) => prs,
+            Err(e) => {
+                out.push(Err(format!("{}: {e}", section.title)));
+                continue;
+            }
+        };
         let items = match &section.filter {
             SectionFilter::None => prs.iter().map(pr_item).collect(),
             SectionFilter::CommentMention {
                 extra_patterns,
                 include_own,
             } => {
-                let filter = CommentFilter::new(&fetched.viewer_login, extra_patterns)?;
-                comment_items(prs, &filter, &fetched.viewer_login, *include_own)
+                let filter = CommentFilter::new(&outcome.viewer_login, extra_patterns)?;
+                comment_items(prs, &filter, &outcome.viewer_login, *include_own)
             }
             SectionFilter::ReviewRequested => prs
                 .iter()
                 .filter(|pr| {
                     pr.review_requested
                         .iter()
-                        .any(|login| login == &fetched.viewer_login)
+                        .any(|login| login == &outcome.viewer_login)
                 })
                 .map(pr_item)
                 .collect(),
@@ -128,7 +135,7 @@ fn exclude_done(items: Vec<Item>, store: &Store) -> Result<Vec<Item>> {
 mod tests {
     use super::*;
     use crate::config::{Column, Section, SectionFilter, SortKey};
-    use crate::github::{Fetched, PrData};
+    use crate::github::PrData;
     use crate::item::{CommentInfo, PrState};
     use crate::store::KIND_PR;
 
@@ -168,10 +175,10 @@ mod tests {
         }
     }
 
-    fn fetched(sections: Vec<Vec<PrData>>) -> Fetched {
-        Fetched {
+    fn fetched(sections: Vec<Vec<PrData>>) -> crate::fetcher::FetchOutcome {
+        crate::fetcher::FetchOutcome {
             viewer_login: "nogu3".into(),
-            sections,
+            sections: sections.into_iter().map(Ok).collect(),
             errors: vec![],
         }
     }
@@ -374,7 +381,7 @@ mod tests {
 
     /// Two PRs whose comment-creation order is the reverse of their PR-update
     /// order, so the two sort keys produce opposite orderings.
-    fn crossed_comment_fetch() -> Fetched {
+    fn crossed_comment_fetch() -> crate::fetcher::FetchOutcome {
         fetched(vec![vec![
             pr_data(
                 "o/r",
@@ -471,5 +478,20 @@ mod tests {
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].pr_number, 1);
         assert!(items[0].comment.is_none(), "PR item, not comment item");
+    }
+
+    #[tokio::test]
+    async fn fetch_error_section_passes_through_with_title() {
+        let store = Store::open_in_memory().unwrap();
+        let outcome = crate::fetcher::FetchOutcome {
+            viewer_login: "nogu3".into(),
+            sections: vec![Err("repo o/gone: not found or no access".into())],
+            errors: vec![],
+        };
+        let results = build_sections(&[section(SectionFilter::None)], &outcome, &store)
+            .await
+            .unwrap();
+        let err = results[0].as_ref().unwrap_err();
+        assert!(err.contains("sec") && err.contains("o/gone"), "got: {err}");
     }
 }

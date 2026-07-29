@@ -88,7 +88,8 @@ pub fn get_token() -> Result<String> {
 }
 
 /// Result of one multi-section fetch. `sections` is parallel to the
-/// `Section` slice passed to `build_query` / `fetch_sections`.
+/// `Section` slice passed to `build_query` / `fetch_sections` (the Fetcher
+/// passes the query-carrying subset).
 #[derive(Debug)]
 pub struct Fetched {
     pub viewer_login: String,
@@ -126,7 +127,7 @@ pub struct PrData {
 /// aliased `search` per section (s0, s1, ...). Search strings travel as
 /// variables to avoid escaping issues. Comment bodies are requested only
 /// for comment-mention sections.
-pub fn build_query(sections: &[Section]) -> (String, serde_json::Value) {
+pub fn build_query(sections: &[&Section]) -> (String, serde_json::Value) {
     let mut query = String::from("query(");
     for i in 0..sections.len() {
         if i > 0 {
@@ -241,7 +242,7 @@ pub(crate) async fn graphql_post(token: &str, body: &serde_json::Value) -> Resul
 
 /// One rate-limit point per call regardless of section count (verified
 /// 2026-07-11 with 2 aliased searches in one request).
-pub async fn fetch_sections(token: &str, sections: &[Section]) -> Result<Fetched> {
+pub async fn fetch_sections(token: &str, sections: &[&Section]) -> Result<Fetched> {
     let (query, variables) = build_query(sections);
     let text = graphql_post(
         token,
@@ -353,7 +354,7 @@ mod tests {
             ),
             section("is:pr review-requested:@me", SectionFilter::None),
         ];
-        let (query, vars) = build_query(&sections);
+        let (query, vars) = build_query(&sections.iter().collect::<Vec<_>>());
         assert!(query.contains("$q0: String!, $q1: String!"), "got: {query}");
         assert!(query.contains("s0: search(query: $q0, type: ISSUE, first: 50)"));
         assert!(query.contains("s1: search(query: $q1, type: ISSUE, first: 50)"));
@@ -375,7 +376,7 @@ mod tests {
             section("is:pr review-requested:@me", SectionFilter::ReviewRequested),
             section("is:pr mentions:@me", SectionFilter::None),
         ];
-        let (query, _) = build_query(&sections);
+        let (query, _) = build_query(&sections.iter().collect::<Vec<_>>());
         assert_eq!(query.matches("reviewRequests(first: 20)").count(), 1);
         let pos = query.find("reviewRequests(first: 20)").unwrap();
         assert!(query.find("s0:").unwrap() < pos && pos < query.find("s1:").unwrap());

@@ -22,37 +22,31 @@ pub(crate) struct PrRef {
 }
 
 impl PrRef {
-    #[allow(dead_code)]
     pub(crate) fn key(&self) -> String {
         format!("{}#{}", self.repo, self.number)
     }
 }
 
-#[allow(dead_code)]
 const REPO_PAGE_QUERY: &str = "query($owner: String!, $name: String!, $cursor: String) {\n  viewer { login }\n  repository(owner: $owner, name: $name) {\n    pullRequests(states: OPEN, first: 100, after: $cursor, orderBy: {field: UPDATED_AT, direction: DESC}) {\n      pageInfo { hasNextPage endCursor }\n      nodes {\n        number\n        title\n        url\n        isDraft\n        updatedAt\n        createdAt\n        author { login }\n        reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }\n      }\n    }\n  }\n}";
 
-#[allow(dead_code)]
 #[derive(Deserialize)]
 struct PageResponse {
     data: Option<PageData>,
     errors: Option<Vec<GqlError>>,
 }
 
-#[allow(dead_code)]
 #[derive(Deserialize)]
 struct PageData {
     viewer: Actor,
     repository: Option<RepoNode>,
 }
 
-#[allow(dead_code)]
 #[derive(Deserialize)]
 struct RepoNode {
     #[serde(rename = "pullRequests")]
     pull_requests: PrConnection,
 }
 
-#[allow(dead_code)]
 #[derive(Deserialize)]
 struct PrConnection {
     #[serde(rename = "pageInfo")]
@@ -60,7 +54,6 @@ struct PrConnection {
     nodes: Vec<Option<RepoPrNode>>,
 }
 
-#[allow(dead_code)]
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PageInfo {
@@ -68,7 +61,6 @@ struct PageInfo {
     end_cursor: Option<String>,
 }
 
-#[allow(dead_code)]
 #[derive(Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 struct RepoPrNode {
@@ -91,7 +83,6 @@ pub(crate) struct RepoPage {
     pub errors: Vec<String>,
 }
 
-#[allow(dead_code)]
 pub(crate) fn parse_repo_page(json: &str, repo: &str) -> Result<RepoPage> {
     let resp: PageResponse = serde_json::from_str(json)?;
     let errors: Vec<String> = resp
@@ -154,7 +145,6 @@ pub(crate) fn parse_repo_page(json: &str, repo: &str) -> Result<RepoPage> {
     })
 }
 
-#[allow(dead_code)]
 pub(crate) struct RepoFetchResult {
     pub viewer_login: String,
     pub prs: Vec<PrData>,
@@ -163,7 +153,6 @@ pub(crate) struct RepoFetchResult {
 
 /// Enumerates every open PR of `repo` ("owner/name", validated at config
 /// load) across pages.
-#[allow(dead_code)]
 pub(crate) async fn fetch_repo_open_prs(token: &str, repo: &str) -> Result<RepoFetchResult> {
     let (owner, name) = repo
         .split_once('/')
@@ -198,13 +187,11 @@ pub(crate) async fn fetch_repo_open_prs(token: &str, repo: &str) -> Result<RepoF
 
 /// Comment batches: ~25 aliased PRs per request keeps each request's node
 /// budget small while a cold cache (a few hundred PRs) stays at ~15 requests.
-#[allow(dead_code)]
 const COMMENT_BATCH_SIZE: usize = 25;
 
 /// Owner/name/number are inlined (not variables): repo strings are
 /// charset-validated at config load, so quoting is safe, and per-item
 /// aliases can't share one variable set anyway.
-#[allow(dead_code)]
 pub(crate) fn build_comments_query(refs: &[PrRef]) -> String {
     let mut q = String::from("query {\n");
     for (i, r) in refs.iter().enumerate() {
@@ -218,27 +205,24 @@ pub(crate) fn build_comments_query(refs: &[PrRef]) -> String {
     q
 }
 
-#[allow(dead_code)]
 #[derive(Deserialize)]
 struct CommentsResponse {
     data: Option<HashMap<String, Option<CommentsRepoNode>>>,
     errors: Option<Vec<GqlError>>,
 }
 
-#[allow(dead_code)]
 #[derive(Deserialize)]
 struct CommentsRepoNode {
     #[serde(rename = "pullRequest")]
     pull_request: Option<CommentsPrNode>,
 }
 
-#[allow(dead_code)]
 #[derive(Deserialize)]
 struct CommentsPrNode {
     comments: CommentConnection,
 }
 
-#[allow(dead_code, clippy::type_complexity)]
+#[allow(clippy::type_complexity)]
 pub(crate) fn parse_comments(
     json: &str,
     refs: &[PrRef],
@@ -274,7 +258,7 @@ pub(crate) fn parse_comments(
     Ok((map, errors))
 }
 
-#[allow(dead_code, clippy::type_complexity)]
+#[allow(clippy::type_complexity)]
 pub(crate) async fn fetch_comments(
     token: &str,
     refs: &[PrRef],
