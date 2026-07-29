@@ -8,9 +8,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Context, Result};
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ghbox_core::config::{Config, KeyBinding, KeySpec, Section};
+use ghbox_core::fetcher::Fetcher;
 use ghbox_core::github;
 use ghbox_core::inbox::{SectionResult, build_sections};
 use ghbox_core::store::{KIND_MERGE_COMMENT, Store};
+use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 
 use crate::app::{App, DoneEntry};
@@ -28,14 +30,17 @@ enum Msg {
 /// SQLite handles a second connection to the same DB fine, and reads see
 /// the main loop's committed done-marks.
 async fn fetch_and_build(
+    fetcher: &Mutex<Fetcher>,
     token: &str,
     sections: &[Section],
     db_path: &Path,
 ) -> ghbox_core::Result<(Vec<SectionResult>, Vec<String>)> {
-    let fetched = github::fetch_sections(token, sections).await?;
+    // The lock is held across the whole fetch; overlapping fetches are
+    // already prevented by the `fetching` flag, so there is no contention.
+    let outcome = fetcher.lock().await.fetch(token, sections).await?;
     let store = Store::open(db_path)?;
-    let results = build_sections(sections, &fetched, &store).await?;
-    Ok((results, fetched.errors))
+    let results = build_sections(sections, &outcome, &store).await?;
+    Ok((results, outcome.errors))
 }
 
 /// `build_sections` holds `&Store` across the command-filter `.await`, and
@@ -62,6 +67,7 @@ impl Drop for FetchingGuard {
 fn spawn_fetch(
     tx: &mpsc::UnboundedSender<Msg>,
     fetching: &Arc<AtomicBool>,
+    fetcher: &Arc<Mutex<Fetcher>>,
     token: String,
     sections: Vec<Section>,
     db_path: std::path::PathBuf,
@@ -84,9 +90,10 @@ fn spawn_fetch(
     });
     let tx = tx.clone();
     let guard = FetchingGuard(Arc::clone(fetching));
+    let fetcher = Arc::clone(fetcher);
     let handle = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
-        let result = handle.block_on(fetch_and_build(&token, &sections, &db_path));
+        let result = handle.block_on(fetch_and_build(&fetcher, &token, &sections, &db_path));
         // Clear the in-flight flag before notifying the UI so the spinner is
         // already off when the result is drawn. Unwind still drops the guard.
         drop(guard);
@@ -151,11 +158,13 @@ async fn run(
 
     // Periodic fetch.
     let fetching = Arc::new(AtomicBool::new(false));
+    let fetcher = Arc::new(Mutex::new(Fetcher::new()));
     let fetch_tx = tx.clone();
     let fetch_token = token.clone();
     let fetch_sections_cfg = config.sections.clone();
     let fetch_db_path = config.db_path.clone();
     let fetch_fetching = Arc::clone(&fetching);
+    let fetch_fetcher = Arc::clone(&fetcher);
     let interval_secs = config.poll_interval_secs.max(30);
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
@@ -171,6 +180,7 @@ async fn run(
             if spawn_fetch(
                 &fetch_tx,
                 &fetch_fetching,
+                &fetch_fetcher,
                 fetch_token.clone(),
                 fetch_sections_cfg.clone(),
                 fetch_db_path.clone(),
@@ -186,9 +196,9 @@ async fn run(
 
     while let Some(msg) = rx.recv().await {
         match msg {
-            Msg::Key(key) => {
-                handle_key(key.code, &mut app, &config, &store, &tx, &fetching, &token)
-            }
+            Msg::Key(key) => handle_key(
+                key.code, &mut app, &config, &store, &tx, &fetching, &fetcher, &token,
+            ),
             Msg::Sections(result) => match *result {
                 Ok((results, api_errors)) => {
                     let filter_error = app.apply_results(results);
@@ -249,6 +259,10 @@ fn binding_matches(binding: &KeyBinding, code: KeyCode) -> bool {
     binding.0.iter().any(|spec| key_matches(*spec, code))
 }
 
+// The `fetcher` handle pushes this past clippy's default 7-argument limit;
+// splitting it into a struct would obscure the one-shot, borrow-everything
+// call site more than it would clarify it.
+#[allow(clippy::too_many_arguments)]
 fn handle_key(
     code: KeyCode,
     app: &mut App,
@@ -256,6 +270,7 @@ fn handle_key(
     store: &Store,
     tx: &mpsc::UnboundedSender<Msg>,
     fetching: &Arc<AtomicBool>,
+    fetcher: &Arc<Mutex<Fetcher>>,
     token: &str,
 ) {
     let kb = &config.keybindings;
@@ -297,6 +312,7 @@ fn handle_key(
         let spawned = spawn_fetch(
             tx,
             fetching,
+            fetcher,
             token.to_string(),
             config.sections.clone(),
             config.db_path.clone(),
