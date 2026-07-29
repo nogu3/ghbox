@@ -7,13 +7,13 @@ use crate::item::{CommentInfo, PrState};
 use crate::{Error, Result};
 
 #[derive(Deserialize)]
-struct GqlError {
-    message: String,
+pub(crate) struct GqlError {
+    pub(crate) message: String,
 }
 
 #[derive(Deserialize)]
-struct Actor {
-    login: String,
+pub(crate) struct Actor {
+    pub(crate) login: String,
 }
 
 #[derive(Deserialize)]
@@ -28,17 +28,46 @@ struct Repo {
 }
 
 #[derive(Deserialize, Default)]
-struct CommentConnection {
-    nodes: Vec<Option<Comment>>,
+pub(crate) struct CommentConnection {
+    pub(crate) nodes: Vec<Option<Comment>>,
 }
 
 #[derive(Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
-struct Comment {
-    database_id: Option<i64>,
-    author: Option<Actor>,
-    body: String,
-    created_at: String,
+pub(crate) struct Comment {
+    pub(crate) database_id: Option<i64>,
+    pub(crate) author: Option<Actor>,
+    pub(crate) body: String,
+    pub(crate) created_at: String,
+}
+
+#[derive(Deserialize, Default)]
+pub(crate) struct ReviewRequestConnection {
+    pub(crate) nodes: Vec<Option<ReviewRequestNode>>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub(crate) struct ReviewRequestNode {
+    requested_reviewer: Option<RequestedReviewer>,
+}
+
+/// `requestedReviewer` is a union; the query only inlines `... on User { login }`,
+/// so Team/Bot reviewers deserialize as `{}` (login: None) and are skipped.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct RequestedReviewer {
+    login: Option<String>,
+}
+
+impl ReviewRequestConnection {
+    pub(crate) fn user_logins(self) -> Vec<String> {
+        self.nodes
+            .into_iter()
+            .flatten()
+            .filter_map(|n| n.requested_reviewer.and_then(|r| r.login))
+            .collect()
+    }
 }
 
 pub fn get_token() -> Result<String> {
@@ -83,6 +112,14 @@ pub struct PrData {
     pub state: PrState,
     /// Populated only for sections whose filter needs comment bodies.
     pub comments: Vec<CommentInfo>,
+    /// Logins of requested *user* reviewers. Team review requests are not
+    /// resolved (would need extra queries); populated for search sections
+    /// with the review-requested filter and for all enumerated PRs.
+    pub review_requested: Vec<String>,
+    /// Whether `comments` reflects the API (search sections fetch comments
+    /// inline; enumeration-sourced PRs get them attached later by the
+    /// Fetcher). Orchestration bookkeeping, not display data.
+    pub comments_fetched: bool,
 }
 
 /// Builds one GraphQL request covering every section: `viewer` plus one
@@ -148,6 +185,7 @@ struct PrNode {
     author: Option<Actor>,
     repository: Option<Repo>,
     comments: CommentConnection,
+    review_requests: ReviewRequestConnection,
 }
 
 /// The shared HTTP client: connection pooling across polls instead of a
@@ -165,19 +203,46 @@ fn http_client() -> Result<&'static reqwest::Client> {
     Ok(CLIENT.get_or_init(|| client))
 }
 
-/// One rate-limit point per call regardless of section count (verified
-/// 2026-07-11 with 2 aliased searches in one request).
-pub async fn fetch_sections(token: &str, sections: &[Section]) -> Result<Fetched> {
-    let (query, variables) = build_query(sections);
+pub(crate) fn comment_infos(conn: CommentConnection) -> Vec<CommentInfo> {
+    conn.nodes
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let id = c.database_id?;
+            Some(CommentInfo {
+                id,
+                author: c
+                    .author
+                    .map(|a| a.login)
+                    .unwrap_or_else(|| "(unknown)".into()),
+                body: c.body,
+                created_at: c.created_at,
+            })
+        })
+        .collect()
+}
+
+pub(crate) async fn graphql_post(token: &str, body: &serde_json::Value) -> Result<String> {
     let response = http_client()?
         .post("https://api.github.com/graphql")
         .bearer_auth(token)
         .header("User-Agent", "ghbox")
-        .json(&serde_json::json!({ "query": query, "variables": variables }))
+        .json(body)
         .send()
         .await?
         .error_for_status()?;
-    let text = response.text().await?;
+    Ok(response.text().await?)
+}
+
+/// One rate-limit point per call regardless of section count (verified
+/// 2026-07-11 with 2 aliased searches in one request).
+pub async fn fetch_sections(token: &str, sections: &[Section]) -> Result<Fetched> {
+    let (query, variables) = build_query(sections);
+    let text = graphql_post(
+        token,
+        &serde_json::json!({ "query": query, "variables": variables }),
+    )
+    .await?;
     parse_sections(&text, sections.len())
 }
 
@@ -217,24 +282,7 @@ pub fn parse_sections(json: &str, section_count: usize) -> Result<Fetched> {
             let Some(repo) = node.repository else {
                 continue;
             };
-            let comments = node
-                .comments
-                .nodes
-                .into_iter()
-                .flatten()
-                .filter_map(|c| {
-                    let id = c.database_id?;
-                    Some(CommentInfo {
-                        id,
-                        author: c
-                            .author
-                            .map(|a| a.login)
-                            .unwrap_or_else(|| "(unknown)".into()),
-                        body: c.body,
-                        created_at: c.created_at,
-                    })
-                })
-                .collect();
+            let comments = comment_infos(node.comments);
             // Draft only exists while OPEN; MERGED/CLOSED win regardless of
             // the flag. Missing `state` (defaulted "") reads as Open.
             let state = match node.state.as_str() {
@@ -256,6 +304,8 @@ pub fn parse_sections(json: &str, section_count: usize) -> Result<Fetched> {
                 pr_created_at: node.created_at,
                 state,
                 comments,
+                review_requested: node.review_requests.user_logins(),
+                comments_fetched: true,
             });
         }
         sections.push(prs);
@@ -357,7 +407,15 @@ mod tests {
               "updatedAt": "2026-07-02T00:00:00Z",
               "createdAt": "2026-07-01T00:00:00Z",
               "author": null,
-              "repository": { "nameWithOwner": "nogu3/hestia" }
+              "repository": { "nameWithOwner": "nogu3/hestia" },
+              "reviewRequests": {
+                "nodes": [
+                  { "requestedReviewer": { "login": "nogu3" } },
+                  { "requestedReviewer": {} },
+                  { "requestedReviewer": null },
+                  null
+                ]
+              }
             },
             {
               "number": 13,
@@ -397,6 +455,10 @@ mod tests {
         assert_eq!(rr.pr_author, "(unknown)"); // ghost author
         assert!(rr.comments.is_empty());
         assert_eq!(rr.state, PrState::Merged);
+        // user reviewer parsed; team ({}), null reviewer, and null node skipped
+        assert_eq!(rr.review_requested, vec!["nogu3".to_string()]);
+        assert!(pr.review_requested.is_empty());
+        assert!(pr.comments_fetched, "search-sourced PRs carry comments");
         // Responses without a state field (old behavior) fall back to Open
         assert_eq!(fetched.sections[1][1].state, PrState::Open);
     }

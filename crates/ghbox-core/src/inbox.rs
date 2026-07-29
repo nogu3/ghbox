@@ -145,6 +145,8 @@ mod tests {
             pr_created_at: "2026-01-01T00:00:00Z".into(),
             state: PrState::Open,
             comments,
+            review_requested: vec![],
+            comments_fetched: true,
         }
     }
 
