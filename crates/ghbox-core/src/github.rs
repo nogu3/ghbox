@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn build_query_aliases_sections_and_passes_variables() {
-        let sections = vec![
+        let sections = [
             section(
                 "is:pr mentions:@me",
                 SectionFilter::CommentMention {
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn build_query_requests_review_requests_only_for_review_requested_sections() {
-        let sections = vec![
+        let sections = [
             section("is:pr review-requested:@me", SectionFilter::ReviewRequested),
             section("is:pr mentions:@me", SectionFilter::None),
         ];
