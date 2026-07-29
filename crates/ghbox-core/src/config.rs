@@ -34,7 +34,12 @@ impl Default for Config {
 #[serde(deny_unknown_fields)]
 pub struct Section {
     pub title: String,
-    pub query: String,
+    /// GitHub search query source. Optional since a section may instead
+    /// enumerate `repos` directly.
+    pub query: Option<String>,
+    /// Direct-enumeration source: open PRs of these `owner/name` repos.
+    #[serde(default)]
+    pub repos: Vec<String>,
     #[serde(default = "default_columns")]
     pub columns: Vec<Column>,
     #[serde(default)]
@@ -402,13 +407,30 @@ impl Default for Keybindings {
     }
 }
 
+/// `owner/name` with a conservative charset. Also guarantees the string is
+/// safe to inline into a GraphQL query literal (no quotes/backslashes).
+fn is_valid_repo(s: &str) -> bool {
+    match s.split_once('/') {
+        Some((owner, name)) => {
+            !owner.is_empty()
+                && !name.is_empty()
+                && [owner, name].iter().all(|part| {
+                    part.chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                })
+        }
+        None => false,
+    }
+}
+
 /// Built-in sections used when the config file has no `sections` key.
 /// Reproduces the pre-config behavior (merge requests + review requests).
 fn default_sections() -> Vec<Section> {
     vec![
         Section {
             title: "Merge Requests".into(),
-            query: "is:pr is:open mentions:@me".into(),
+            query: Some("is:pr is:open mentions:@me".into()),
+            repos: Vec::new(),
             columns: vec![
                 Column::State,
                 Column::Repo,
@@ -426,7 +448,8 @@ fn default_sections() -> Vec<Section> {
         },
         Section {
             title: "Review Requests".into(),
-            query: "is:pr is:open review-requested:@me".into(),
+            query: Some("is:pr is:open review-requested:@me".into()),
+            repos: Vec::new(),
             columns: default_columns(),
             filter: SectionFilter::None,
             sort: SortKey::default(),
@@ -489,6 +512,20 @@ impl Config {
             ));
         }
         for section in &self.sections {
+            if section.query.is_none() && section.repos.is_empty() {
+                return Err(Error::Config(format!(
+                    "section {:?}: needs `query`, `repos`, or both",
+                    section.title
+                )));
+            }
+            for repo in &section.repos {
+                if !is_valid_repo(repo) {
+                    return Err(Error::Config(format!(
+                        "section {:?}: invalid repo {repo:?} (expected \"owner/name\")",
+                        section.title
+                    )));
+                }
+            }
             if let SectionFilter::CommentMention { extra_patterns, .. } = &section.filter {
                 for pattern in extra_patterns {
                     regex::Regex::new(pattern).map_err(|e| {
@@ -885,5 +922,43 @@ filter = { type = "command", command = "jq -r .id" }
             parse("[[sections]]\ntitle = \"t\"\nquery = \"q\"\ncolumns = [\"state\", \"title\"]\n")
                 .unwrap();
         assert_eq!(cfg.sections[0].columns[0], Column::State);
+    }
+
+    #[test]
+    fn repos_only_section_parses() {
+        let cfg = parse("[[sections]]\ntitle = \"t\"\nrepos = [\"o/r\", \"o2/r2\"]\n").unwrap();
+        assert_eq!(cfg.sections[0].query, None);
+        assert_eq!(
+            cfg.sections[0].repos,
+            vec!["o/r".to_string(), "o2/r2".to_string()]
+        );
+    }
+
+    #[test]
+    fn query_and_repos_together_parse() {
+        let cfg =
+            parse("[[sections]]\ntitle = \"t\"\nquery = \"is:pr\"\nrepos = [\"o/r\"]\n").unwrap();
+        assert_eq!(cfg.sections[0].query.as_deref(), Some("is:pr"));
+        assert_eq!(cfg.sections[0].repos, vec!["o/r".to_string()]);
+    }
+
+    #[test]
+    fn section_without_query_or_repos_is_error() {
+        let err = parse("[[sections]]\ntitle = \"t\"\n").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("query") && msg.contains("repos"), "got: {msg}");
+    }
+
+    #[test]
+    fn empty_repos_without_query_is_error() {
+        assert!(parse("[[sections]]\ntitle = \"t\"\nrepos = []\n").is_err());
+    }
+
+    #[test]
+    fn invalid_repo_format_is_error() {
+        for bad in ["owner", "owner/", "/name", "a/b/c", "a b/c", "a\"b/c"] {
+            let toml = format!("[[sections]]\ntitle = \"t\"\nrepos = [{bad:?}]\n");
+            assert!(parse(&toml).is_err(), "{bad:?} should be rejected");
+        }
     }
 }

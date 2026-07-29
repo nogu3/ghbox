@@ -126,7 +126,8 @@ mod tests {
     fn section(filter: SectionFilter) -> Section {
         Section {
             title: "sec".into(),
-            query: "q".into(),
+            query: Some("q".into()),
+            repos: vec![],
             columns: vec![Column::Repo],
             filter,
             sort: SortKey::default(),

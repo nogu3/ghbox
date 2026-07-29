@@ -112,7 +112,12 @@ pub fn build_query(sections: &[Section]) -> (String, serde_json::Value) {
     let variables: serde_json::Map<String, serde_json::Value> = sections
         .iter()
         .enumerate()
-        .map(|(i, s)| (format!("q{i}"), serde_json::Value::String(s.query.clone())))
+        .map(|(i, s)| {
+            (
+                format!("q{i}"),
+                serde_json::Value::String(s.query.clone().unwrap_or_default()),
+            )
+        })
         .collect();
     (query, serde_json::Value::Object(variables))
 }
@@ -273,7 +278,8 @@ mod tests {
     fn section(query: &str, filter: SectionFilter) -> Section {
         Section {
             title: "t".into(),
-            query: query.into(),
+            query: Some(query.into()),
+            repos: vec![],
             columns: vec![],
             filter,
             sort: crate::config::SortKey::default(),
