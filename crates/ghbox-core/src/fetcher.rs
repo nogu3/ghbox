@@ -103,6 +103,33 @@ fn wants_comments(section: &Section) -> bool {
     matches!(section.filter, SectionFilter::CommentMention { .. })
 }
 
+/// Inserts a cache entry for each `needed` ref whose key is PRESENT in
+/// `map` (the batch fetch's result). Keys absent from `map` — an
+/// error-nulled GraphQL alias — are left un-cached: caching an empty
+/// comment list for them would silently hide a possible false negative.
+pub(crate) fn cache_batch_results(
+    cache: &mut HashMap<String, CachedComments>,
+    needed: &[PrRef],
+    map: &HashMap<String, Vec<CommentInfo>>,
+    key_updated_at: &HashMap<String, String>,
+) {
+    for r in needed {
+        let key = r.key();
+        let Some(comments) = map.get(&key) else {
+            continue;
+        };
+        if let Some(updated_at) = key_updated_at.get(&key) {
+            cache.insert(
+                key,
+                CachedComments {
+                    updated_at: updated_at.clone(),
+                    comments: comments.clone(),
+                },
+            );
+        }
+    }
+}
+
 impl Fetcher {
     pub fn new() -> Self {
         Self::default()
@@ -241,21 +268,7 @@ impl Fetcher {
             match repo_fetch::fetch_comments(token, &needed).await {
                 Ok((map, errs)) => {
                     warnings.extend(errs);
-                    for r in &needed {
-                        let key = r.key();
-                        // absent from the map = PR vanished mid-fetch; an
-                        // empty entry still marks it as fetched
-                        let comments = map.get(&key).cloned().unwrap_or_default();
-                        if let Some(updated_at) = key_updated_at.get(&key) {
-                            self.comment_cache.insert(
-                                key,
-                                CachedComments {
-                                    updated_at: updated_at.clone(),
-                                    comments,
-                                },
-                            );
-                        }
-                    }
+                    cache_batch_results(&mut self.comment_cache, &needed, &map, &key_updated_at);
                     None
                 }
                 Err(e) => Some(format!("comment fetch failed: {e}")),
@@ -382,6 +395,38 @@ mod tests {
         assert!(prs[0].comments_fetched);
         assert_eq!(prs[0].comments[0].id, 9);
         assert!(!prs[1].comments_fetched, "stale cache must not attach");
+    }
+
+    #[test]
+    fn cache_batch_results_skips_keys_absent_from_map() {
+        let mut cache = HashMap::new();
+        let needed = vec![
+            PrRef {
+                repo: "o/r".into(),
+                number: 1,
+            },
+            PrRef {
+                repo: "o/r".into(),
+                number: 2,
+            },
+        ];
+        // o/r#2 is absent from the map — an error-nulled alias — and must
+        // not get a cache entry, even though it was in `needed` and has a
+        // known updatedAt.
+        let map: HashMap<String, Vec<CommentInfo>> =
+            [("o/r#1".to_string(), vec![])].into_iter().collect();
+        let key_updated_at: HashMap<String, String> = [
+            ("o/r#1".to_string(), "2026-07-01T00:00:00Z".to_string()),
+            ("o/r#2".to_string(), "2026-07-01T00:00:00Z".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        cache_batch_results(&mut cache, &needed, &map, &key_updated_at);
+        assert!(cache.contains_key("o/r#1"), "present in map — cached");
+        assert!(
+            !cache.contains_key("o/r#2"),
+            "absent from map (errored alias) — must not be cached"
+        );
     }
 
     #[test]

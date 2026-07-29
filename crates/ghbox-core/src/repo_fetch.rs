@@ -166,7 +166,9 @@ pub(crate) async fn fetch_repo_open_prs(token: &str, repo: &str) -> Result<RepoF
             "query": REPO_PAGE_QUERY,
             "variables": { "owner": owner, "name": name, "cursor": cursor },
         });
-        let text = graphql_post(token, &body).await?;
+        let text = graphql_post(token, &body)
+            .await
+            .map_err(|e| Error::Api(format!("repo {repo}: {e}")))?;
         let page = parse_repo_page(&text, repo)?;
         if viewer_login.is_none() {
             viewer_login = Some(page.viewer_login);
@@ -248,12 +250,23 @@ pub(crate) fn parse_comments(
     let mut map = HashMap::new();
     for (i, r) in refs.iter().enumerate() {
         let Some(Some(node)) = data.remove(&format!("p{i}")) else {
-            continue; // nulled alias (no access) — treated as no comments
+            // Alias missing or nulled by a GraphQL error — leave the key
+            // out entirely. The caller must treat this as an incomplete
+            // fetch, not as "no comments": the PR may still exist and hold
+            // a matching comment we simply failed to read this poll.
+            continue;
         };
-        let Some(pr) = node.pull_request else {
-            continue; // PR vanished between enumeration and this fetch
-        };
-        map.insert(r.key(), comment_infos(pr.comments));
+        match node.pull_request {
+            Some(pr) => {
+                map.insert(r.key(), comment_infos(pr.comments));
+            }
+            None => {
+                // PR genuinely gone (closed/deleted) between enumeration
+                // and this fetch — cache an empty comment list; it will
+                // self-heal by leaving the enumeration on the next poll.
+                map.insert(r.key(), Vec::new());
+            }
+        }
     }
     Ok((map, errors))
 }
@@ -396,6 +409,10 @@ mod tests {
                 repo: "o/r".into(),
                 number: 8,
             },
+            PrRef {
+                repo: "o/r".into(),
+                number: 9,
+            },
         ];
         let json = r#"{
           "data": {
@@ -413,14 +430,20 @@ mod tests {
                 }
               }
             },
-            "p1": { "pullRequest": null }
+            "p1": { "pullRequest": null },
+            "p2": null
           }
         }"#;
         let (map, errors) = parse_comments(json, &refs).unwrap();
         assert!(errors.is_empty());
         assert_eq!(map["o/r#7"].len(), 1);
         assert_eq!(map["o/r#7"][0].id, 11);
-        assert!(!map.contains_key("o/r#8"));
+        // PR genuinely gone: an empty entry is cached (key present).
+        assert_eq!(map["o/r#8"].len(), 0);
+        // Alias entirely null (error-nulled): key must be absent, so the
+        // fetcher treats this as an incomplete fetch rather than caching
+        // a false "no comments".
+        assert!(!map.contains_key("o/r#9"));
     }
 
     #[test]
