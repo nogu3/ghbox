@@ -194,6 +194,14 @@ async fn run(
 
     let titles = config.sections.iter().map(|s| s.title.clone()).collect();
     let mut app = App::new(titles);
+    // Last fetch's displayed items, rendered instantly while the first
+    // fetch runs; the snapshot is a cache, so a missing/stale file just
+    // means the usual Loading start.
+    let snapshot_path = ghbox_core::snapshot::default_path();
+    if let Some(restored) = ghbox_core::snapshot::load(&snapshot_path, &config.sections, &store) {
+        app.status = cache_status(&restored.fetched_at, local_offset);
+        app.apply_snapshot(restored.sections);
+    }
     terminal.draw(|f| ui::draw(f, &app, &config, fetching.load(Ordering::SeqCst)))?;
 
     while let Some(msg) = rx.recv().await {
@@ -205,6 +213,13 @@ async fn run(
                 Ok((results, api_errors)) => {
                     let filter_error = app.apply_results(results);
                     app.status = compose_status(now_hms(local_offset), filter_error, &api_errors);
+                    // Snapshot mirrors what is now displayed (error
+                    // sections kept their previous items via apply_results).
+                    let snap =
+                        ghbox_core::snapshot::build(&config.sections, &app.sections, now_utc_iso());
+                    if let Err(e) = ghbox_core::snapshot::save(&snapshot_path, &snap) {
+                        app.status = format!("{} ⚠ snapshot: {e}", app.status);
+                    }
                 }
                 Err(e) => app.status = format!("fetch error: {e}"),
             },
@@ -241,6 +256,22 @@ fn now_hms(offset: time::UtcOffset) -> String {
 
 fn hms(t: time::OffsetDateTime) -> String {
     format!("{:02}:{:02}:{:02}", t.hour(), t.minute(), t.second())
+}
+
+/// Status line for a restored snapshot: its fetch time + cache marker.
+/// Falls back to a bare marker if the stored timestamp doesn't parse.
+fn cache_status(fetched_at: &str, offset: time::UtcOffset) -> String {
+    match time::OffsetDateTime::parse(fetched_at, &time::format_description::well_known::Rfc3339) {
+        Ok(t) => format!("{} (cache)", hms(t.to_offset(offset))),
+        Err(_) => "(cache)".into(),
+    }
+}
+
+/// UTC ISO8601 for `Snapshot.fetched_at`.
+fn now_utc_iso() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
 }
 
 fn key_matches(spec: KeySpec, code: KeyCode) -> bool {
@@ -398,6 +429,29 @@ mod tests {
         assert_eq!(
             s,
             "filter error: sec: exited with 1 ⚠ API: SAML enforcement"
+        );
+    }
+
+    #[test]
+    fn cache_status_converts_to_local_time() {
+        let jst = UtcOffset::from_hms(9, 0, 0).unwrap();
+        assert_eq!(
+            super::cache_status("2026-07-31T01:23:45Z", jst),
+            "10:23:45 (cache)"
+        );
+    }
+
+    #[test]
+    fn cache_status_survives_bad_timestamp() {
+        assert_eq!(super::cache_status("garbage", UtcOffset::UTC), "(cache)");
+    }
+
+    #[test]
+    fn now_utc_iso_is_rfc3339() {
+        let s = super::now_utc_iso();
+        assert!(
+            time::OffsetDateTime::parse(&s, &time::format_description::well_known::Rfc3339).is_ok(),
+            "got: {s}"
         );
     }
 }

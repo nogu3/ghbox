@@ -57,6 +57,10 @@ Future: let mando call ghbox-core too (HTTP endpoint or direct dependency).
    requests are not matched) / command (pipe JSONL to an external command, read
    back the ids to keep)
 6. Drop done items → sort repo asc, sort-key time desc → render as tabs + table
+7. The displayed per-section items are saved to a local snapshot
+   (`~/.cache/ghbox/snapshot.json`); the next launch renders them instantly
+   (re-checking done state, skipping sections whose config changed) while
+   the first fetch runs in the background
 
 ## Sections
 

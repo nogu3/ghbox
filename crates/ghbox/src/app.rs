@@ -141,6 +141,17 @@ impl App {
         self.pending_done.insert(id);
         self.clamp_selected();
     }
+
+    /// Fills sections from a startup snapshot. Only `Some` slots are touched;
+    /// `None` sections (no snapshot / config changed) keep their empty
+    /// Loading state until the first fetch lands.
+    pub fn apply_snapshot(&mut self, restored: Vec<Option<Vec<Item>>>) {
+        for (slot, items) in self.sections.iter_mut().zip(restored) {
+            if let Some(items) = items {
+                slot.items = items;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -328,6 +339,16 @@ mod tests {
         assert_eq!(app.selected, 0);
         app.remove_selected();
         assert_eq!(app.items_len(), 0);
+        assert_eq!(app.selected, 0);
+    }
+
+    #[test]
+    fn apply_snapshot_fills_some_slots_and_keeps_none_slots_empty() {
+        let mut app = App::new(vec!["A".into(), "B".into(), "C".into()]);
+        app.apply_snapshot(vec![Some(vec![pr_item(1), pr_item(2)]), None, Some(vec![])]);
+        assert_eq!(app.sections[0].items.len(), 2);
+        assert!(app.sections[1].items.is_empty(), "None slot untouched");
+        assert!(app.sections[2].items.is_empty());
         assert_eq!(app.selected, 0);
     }
 }
