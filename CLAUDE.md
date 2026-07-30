@@ -41,7 +41,9 @@ Future: let mando call ghbox-core too (HTTP endpoint or direct dependency).
    request `comments(last: 50)`, review-requested sections request `reviewRequests`
    (search strings passed as variables)
 2. Separately enumerate every unique repo named in a `repos` list: one paginated
-   GraphQL request per repo, open PRs only — immune to search-index lag
+   GraphQL request per repo, open PRs only — immune to search-index lag. The
+   search request and the repo enumerations all run concurrently (repo requests
+   capped at a small in-flight limit)
 3. Per section, merge candidates = its search matches ∪ its repos' enumerated PRs,
    deduped by repo+PR number (the search entry wins, since it may already carry
    comments)

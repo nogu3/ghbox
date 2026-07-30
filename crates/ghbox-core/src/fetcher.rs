@@ -5,11 +5,18 @@
 
 use std::collections::{HashMap, HashSet};
 
+use futures_util::StreamExt;
+
 use crate::config::{Section, SectionFilter};
 use crate::github::{self, PrData};
 use crate::item::CommentInfo;
 use crate::repo_fetch::{self, PrRef};
 use crate::{Error, Result};
+
+/// Max in-flight repo enumeration requests (the search request runs
+/// alongside them). Kept small so a long repo list doesn't trip GitHub's
+/// secondary rate limits.
+const REPO_FETCH_CONCURRENCY: usize = 5;
 
 pub struct FetchOutcome {
     pub viewer_login: String,
@@ -138,17 +145,21 @@ impl Fetcher {
     pub async fn fetch(&mut self, token: &str, sections: &[Section]) -> Result<FetchOutcome> {
         let mut warnings: Vec<String> = Vec::new();
 
-        // 1. Search, for the query-carrying subset.
+        // 1+2. Search (query-carrying subset) and per-repo enumeration, run
+        // concurrently. Repo requests are also concurrent among themselves,
+        // capped to stay clear of GitHub's secondary rate limits.
         let search_subset: Vec<(usize, &Section)> = sections
             .iter()
             .enumerate()
             .filter(|(_, s)| s.query.is_some())
             .collect();
-        let search_result = if search_subset.is_empty() {
-            None
-        } else {
-            let subset: Vec<&Section> = search_subset.iter().map(|(_, s)| *s).collect();
-            Some(github::fetch_sections(token, &subset).await)
+        let search_fut = async {
+            if search_subset.is_empty() {
+                None
+            } else {
+                let subset: Vec<&Section> = search_subset.iter().map(|(_, s)| *s).collect();
+                Some(github::fetch_sections(token, &subset).await)
+            }
         };
         // section index → position in the search Fetched
         let search_pos: HashMap<usize, usize> = search_subset
@@ -157,7 +168,8 @@ impl Fetcher {
             .map(|(pos, (idx, _))| (*idx, pos))
             .collect();
 
-        // 2. Enumeration, once per unique repo (order-stable for tests/logs).
+        // Once per unique repo (order-stable for tests/logs; `buffered`
+        // preserves input order).
         let unique_repos: Vec<&str> = {
             let mut seen = HashSet::new();
             sections
@@ -166,10 +178,17 @@ impl Fetcher {
                 .filter(|r| seen.insert(*r))
                 .collect()
         };
+        let repos_fut = futures_util::stream::iter(unique_repos.iter().map(|repo| async move {
+            (*repo, repo_fetch::fetch_repo_open_prs(token, repo).await)
+        }))
+        .buffered(REPO_FETCH_CONCURRENCY)
+        .collect::<Vec<_>>();
+        let (search_result, repo_outcomes) = tokio::join!(search_fut, repos_fut);
+
         let mut repo_results: HashMap<&str, Result<Vec<PrData>>> = HashMap::new();
         let mut enum_viewer: Option<String> = None;
-        for repo in &unique_repos {
-            match repo_fetch::fetch_repo_open_prs(token, repo).await {
+        for (repo, result) in repo_outcomes {
+            match result {
                 Ok(r) => {
                     enum_viewer = Some(r.viewer_login);
                     warnings.extend(r.errors);

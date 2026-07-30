@@ -8,6 +8,7 @@ description = "Core library for ghbox: GitHub GraphQL fetch, same-comment mentio
 
 [dependencies]
 dirs = "6.0.0"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 regex = "1.13.0"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
