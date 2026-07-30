@@ -290,14 +290,14 @@ impl Fetcher {
         let comment_failure: Option<String> = if needed.is_empty() {
             None
         } else {
-            match repo_fetch::fetch_comments(token, &needed).await {
-                Ok((map, errs)) => {
-                    warnings.extend(errs);
-                    cache_batch_results(&mut self.comment_cache, &needed, &map, &key_updated_at);
-                    None
-                }
-                Err(e) => Some(format!("comment fetch failed: {e}")),
-            }
+            let (map, errs) = repo_fetch::fetch_comments(token, &needed).await;
+            // Failed chunks left their keys out of `map`; sections still
+            // missing comments degrade below, using the first error as
+            // the message. Successful chunks are cached regardless.
+            let failure = errs.first().map(|e| format!("comment fetch failed: {e}"));
+            warnings.extend(errs);
+            cache_batch_results(&mut self.comment_cache, &needed, &map, &key_updated_at);
+            failure
         };
         for (section, candidates) in sections.iter().zip(out_sections.iter_mut()) {
             if !wants_comments(section) {

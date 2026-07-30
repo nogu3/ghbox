@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use futures_util::StreamExt;
+
 use serde::Deserialize;
 
 use crate::github::{
@@ -191,6 +193,12 @@ pub(crate) async fn fetch_repo_open_prs(token: &str, repo: &str) -> Result<RepoF
 /// budget small while a cold cache (a few hundred PRs) stays at ~15 requests.
 const COMMENT_BATCH_SIZE: usize = 25;
 
+/// Max in-flight comment batch requests. Same value and rationale as
+/// `REPO_FETCH_CONCURRENCY`: stay clear of GitHub's secondary rate
+/// limits. The comment fetch runs after repo enumeration completes, so
+/// the two caps never stack.
+const COMMENT_FETCH_CONCURRENCY: usize = 5;
+
 /// Owner/name/number are inlined (not variables): repo strings are
 /// charset-validated at config load, so quoting is safe, and per-item
 /// aliases can't share one variable set anyway.
@@ -274,7 +282,7 @@ pub(crate) fn parse_comments(
 /// Folds per-chunk fetch results into one `(map, errors)`. A failed
 /// chunk contributes no keys — absent keys already mean "incomplete
 /// fetch, do not cache" to the caller — and surfaces its error message.
-#[allow(clippy::type_complexity, dead_code)]
+#[allow(clippy::type_complexity)]
 pub(crate) fn merge_chunk_results(
     results: Vec<Result<(HashMap<String, Vec<CommentInfo>>, Vec<String>)>>,
 ) -> (HashMap<String, Vec<CommentInfo>>, Vec<String>) {
@@ -292,21 +300,29 @@ pub(crate) fn merge_chunk_results(
     (map, errors)
 }
 
-#[allow(clippy::type_complexity)]
+/// Chunks are fetched concurrently (capped). Owned `Vec<PrRef>` chunks,
+/// not borrowed slices: borrowed items inside the buffered stream trip
+/// rustc's "implementation is not general enough" limitation when the
+/// caller needs the future to be `Send` (the TUI runs fetches on
+/// `tokio::spawn`) — same workaround as the repo enumeration in
+/// fetcher.rs.
 pub(crate) async fn fetch_comments(
     token: &str,
     refs: &[PrRef],
-) -> Result<(HashMap<String, Vec<CommentInfo>>, Vec<String>)> {
-    let mut map = HashMap::new();
-    let mut errors = Vec::new();
-    for chunk in refs.chunks(COMMENT_BATCH_SIZE) {
-        let body = serde_json::json!({ "query": build_comments_query(chunk) });
+) -> (HashMap<String, Vec<CommentInfo>>, Vec<String>) {
+    let chunks: Vec<Vec<PrRef>> = refs
+        .chunks(COMMENT_BATCH_SIZE)
+        .map(|c| c.to_vec())
+        .collect();
+    let results = futures_util::stream::iter(chunks.into_iter().map(|chunk| async move {
+        let body = serde_json::json!({ "query": build_comments_query(&chunk) });
         let text = graphql_post(token, &body).await?;
-        let (chunk_map, chunk_errors) = parse_comments(&text, chunk)?;
-        map.extend(chunk_map);
-        errors.extend(chunk_errors);
-    }
-    Ok((map, errors))
+        parse_comments(&text, &chunk)
+    }))
+    .buffered(COMMENT_FETCH_CONCURRENCY)
+    .collect::<Vec<_>>()
+    .await;
+    merge_chunk_results(results)
 }
 
 #[cfg(test)]
