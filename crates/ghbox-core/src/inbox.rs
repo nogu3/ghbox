@@ -17,13 +17,18 @@ pub struct SectionData {
 /// section would falsely read as "all clear").
 pub type SectionResult = std::result::Result<SectionData, String>;
 
-/// filter → read-state exclusion → sort, per section. `outcome.sections`
-/// must be parallel to `sections`.
-pub async fn build_sections(
+/// Per-section filtered items, before read-state exclusion. Err carries the
+/// same status-bar message contract as [`SectionResult`].
+pub type FilteredSection = std::result::Result<Vec<Item>, String>;
+
+/// The async half of section building: apply each section's filter to the
+/// fetched PRs. Takes no `Store`, so the returned future is `Send` — the TUI
+/// relies on this to run the whole fetch on `tokio::spawn`, which the runtime
+/// cancels cleanly if the user quits mid-fetch.
+pub async fn filter_sections(
     sections: &[Section],
     outcome: &crate::fetcher::FetchOutcome,
-    store: &Store,
-) -> Result<Vec<SectionResult>> {
+) -> Result<Vec<FilteredSection>> {
     let mut out = Vec::with_capacity(sections.len());
     for (section, fetched_prs) in sections.iter().zip(&outcome.sections) {
         let prs = match fetched_prs {
@@ -65,6 +70,27 @@ pub async fn build_sections(
                 }
             }
         };
+        out.push(Ok(items));
+    }
+    Ok(out)
+}
+
+/// The sync half: read-state exclusion → sort. `filtered` must be parallel
+/// to `sections` (as produced by [`filter_sections`]).
+pub fn finalize_sections(
+    sections: &[Section],
+    filtered: Vec<FilteredSection>,
+    store: &Store,
+) -> Result<Vec<SectionResult>> {
+    let mut out = Vec::with_capacity(sections.len());
+    for (section, items) in sections.iter().zip(filtered) {
+        let items = match items {
+            Ok(items) => items,
+            Err(e) => {
+                out.push(Err(e));
+                continue;
+            }
+        };
         let mut items = exclude_done(items, store)?;
         items.sort_by(|a, b| {
             a.repo
@@ -77,6 +103,18 @@ pub async fn build_sections(
         }));
     }
     Ok(out)
+}
+
+/// filter → read-state exclusion → sort, per section. `outcome.sections`
+/// must be parallel to `sections`. Holding `&Store` makes this future
+/// `!Send`; callers that need `Send` use the two halves directly.
+pub async fn build_sections(
+    sections: &[Section],
+    outcome: &crate::fetcher::FetchOutcome,
+    store: &Store,
+) -> Result<Vec<SectionResult>> {
+    let filtered = filter_sections(sections, outcome).await?;
+    finalize_sections(sections, filtered, store)
 }
 
 fn pr_item(pr: &PrData) -> Item {
@@ -181,6 +219,18 @@ mod tests {
             sections: sections.into_iter().map(Ok).collect(),
             errors: vec![],
         }
+    }
+
+    /// The TUI runs the fetch+filter future on `tokio::spawn`; if it ever
+    /// becomes `!Send` again (e.g. a `&Store` held across an await), quitting
+    /// mid-fetch regresses to a panic at runtime shutdown.
+    #[test]
+    fn filter_sections_future_is_send() {
+        fn assert_send<F: Send>(_: &F) {}
+        let sections = [section(SectionFilter::None)];
+        let outcome = fetched(vec![vec![]]);
+        let fut = filter_sections(&sections, &outcome);
+        assert_send(&fut);
     }
 
     #[tokio::test]

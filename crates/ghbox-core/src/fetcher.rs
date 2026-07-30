@@ -169,23 +169,29 @@ impl Fetcher {
             .collect();
 
         // Once per unique repo (order-stable for tests/logs; `buffered`
-        // preserves input order).
-        let unique_repos: Vec<&str> = {
+        // preserves input order). Owned `String`s, not `&str`: borrowed items
+        // inside the buffered stream trip rustc's "implementation is not
+        // general enough" limitation when the caller needs this future to be
+        // `Send` (the TUI runs it on `tokio::spawn`).
+        let unique_repos: Vec<String> = {
             let mut seen = HashSet::new();
             sections
                 .iter()
-                .flat_map(|s| s.repos.iter().map(String::as_str))
-                .filter(|r| seen.insert(*r))
+                .flat_map(|s| s.repos.iter())
+                .filter(|r| seen.insert(r.as_str()))
+                .cloned()
                 .collect()
         };
-        let repos_fut = futures_util::stream::iter(unique_repos.iter().map(|repo| async move {
-            (*repo, repo_fetch::fetch_repo_open_prs(token, repo).await)
-        }))
-        .buffered(REPO_FETCH_CONCURRENCY)
-        .collect::<Vec<_>>();
+        let repos_fut =
+            futures_util::stream::iter(unique_repos.into_iter().map(|repo| async move {
+                let result = repo_fetch::fetch_repo_open_prs(token, &repo).await;
+                (repo, result)
+            }))
+            .buffered(REPO_FETCH_CONCURRENCY)
+            .collect::<Vec<_>>();
         let (search_result, repo_outcomes) = tokio::join!(search_fut, repos_fut);
 
-        let mut repo_results: HashMap<&str, Result<Vec<PrData>>> = HashMap::new();
+        let mut repo_results: HashMap<String, Result<Vec<PrData>>> = HashMap::new();
         let mut enum_viewer: Option<String> = None;
         for (repo, result) in repo_outcomes {
             match result {
@@ -309,12 +315,13 @@ impl Fetcher {
             }
         }
 
-        // 6. Evict cache entries of PRs no longer open.
+        // 6. Evict cache entries of PRs no longer open. `repo_results` keys
+        // are exactly the unique repos fetched this poll.
         let mut live_keys = HashSet::new();
         let mut succeeded_repos = HashSet::new();
-        for repo in &unique_repos {
-            if let Some(Ok(prs)) = repo_results.get(repo) {
-                succeeded_repos.insert((*repo).to_string());
+        for (repo, result) in &repo_results {
+            if let Ok(prs) = result {
+                succeeded_repos.insert(repo.clone());
                 live_keys.extend(prs.iter().map(key_of));
             }
         }

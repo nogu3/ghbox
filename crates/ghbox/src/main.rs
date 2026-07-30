@@ -10,7 +10,7 @@ use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ghbox_core::config::{Config, KeyBinding, KeySpec, Section};
 use ghbox_core::fetcher::Fetcher;
 use ghbox_core::github;
-use ghbox_core::inbox::{SectionResult, build_sections};
+use ghbox_core::inbox::{SectionResult, filter_sections, finalize_sections};
 use ghbox_core::store::{KIND_MERGE_COMMENT, Store};
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
@@ -29,6 +29,12 @@ enum Msg {
 /// per section and must not freeze input handling. Opens its own Store —
 /// SQLite handles a second connection to the same DB fine, and reads see
 /// the main loop's committed done-marks.
+///
+/// The `Store` is opened only after the last `.await`: a `&Store`
+/// (`rusqlite::Connection` is `!Sync`) held across an await would make this
+/// future `!Send`, forcing it onto a `spawn_blocking` thread via
+/// `Handle::block_on` — which panics at runtime shutdown if the user quits
+/// mid-fetch ("A Tokio 1.x context was found, but it is being shutdown").
 async fn fetch_and_build(
     fetcher: &Mutex<Fetcher>,
     token: &str,
@@ -38,20 +44,14 @@ async fn fetch_and_build(
     // The lock is held across the whole fetch; overlapping fetches are
     // already prevented by the `fetching` flag, so there is no contention.
     let outcome = fetcher.lock().await.fetch(token, sections).await?;
+    let filtered = filter_sections(sections, &outcome).await?;
     let store = Store::open(db_path)?;
-    let results = build_sections(sections, &outcome, &store).await?;
+    let results = finalize_sections(sections, filtered, &store)?;
     Ok((results, outcome.errors))
 }
 
-/// `build_sections` holds `&Store` across the command-filter `.await`, and
-/// `Store` (a `rusqlite::Connection`) is `!Sync`, so the future is `!Send`
-/// and cannot be handed to `tokio::spawn` directly. Drive it to completion
-/// on a `spawn_blocking` thread instead, via `Handle::block_on` — the
-/// future never needs to move across threads once it starts, only the
-/// plain-data inputs and the result do.
-///
 /// `fetching` guards against overlapping fetches: a black-holed HTTP
-/// connection would otherwise pin one blocking-pool thread per poll tick.
+/// connection would otherwise pile up one in-flight fetch per poll tick.
 /// Returns `false` (no task spawned) if a fetch is already in flight.
 /// Clears the in-flight flag when the fetch task ends — including a panic,
 /// which would otherwise leave the flag stuck and silently disable refresh
@@ -91,9 +91,11 @@ fn spawn_fetch(
     let tx = tx.clone();
     let guard = FetchingGuard(Arc::clone(fetching));
     let fetcher = Arc::clone(fetcher);
-    let handle = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || {
-        let result = handle.block_on(fetch_and_build(&fetcher, &token, &sections, &db_path));
+    // A plain spawned task (the future is Send — see fetch_and_build) is
+    // cancelled cleanly when the runtime drops on quit, unlike
+    // spawn_blocking + Handle::block_on, which panics at shutdown.
+    tokio::spawn(async move {
+        let result = fetch_and_build(&fetcher, &token, &sections, &db_path).await;
         // Clear the in-flight flag before notifying the UI so the spinner is
         // already off when the result is drawn. Unwind still drops the guard.
         drop(guard);
