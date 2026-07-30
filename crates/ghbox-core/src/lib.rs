@@ -9,6 +9,7 @@ pub mod github;
 pub mod inbox;
 pub mod item;
 pub(crate) mod repo_fetch;
+pub mod snapshot;
 pub mod store;
 
 pub use error::{Error, Result};

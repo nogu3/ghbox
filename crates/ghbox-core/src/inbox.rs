@@ -155,7 +155,7 @@ fn comment_items(
     items
 }
 
-fn exclude_done(items: Vec<Item>, store: &Store) -> Result<Vec<Item>> {
+pub(crate) fn exclude_done(items: Vec<Item>, store: &Store) -> Result<Vec<Item>> {
     let mut kept = Vec::new();
     for item in items {
         let done = match &item.comment {

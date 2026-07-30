@@ -1,10 +1,10 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::SortKey;
 
 /// PR state for the state-icon column. `Draft` is derived at parse time from
 /// GraphQL `state == OPEN && isDraft`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PrState {
     Open,
@@ -15,7 +15,7 @@ pub enum PrState {
 
 /// A single row in a section: a PR (`comment == None`) or a specific comment
 /// on a PR (`comment == Some`, produced by the comment-mention filter).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Item {
     /// Repository nameWithOwner, e.g. "nogu3/hestia".
     pub repo: String,
@@ -32,7 +32,7 @@ pub struct Item {
     pub comment: Option<CommentInfo>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommentInfo {
     /// GitHub comment databaseId. Read-state key for comment items.
     pub id: i64,
@@ -163,5 +163,13 @@ mod tests {
             serde_json::to_value(pr_item()).unwrap()["comment"],
             serde_json::Value::Null
         );
+    }
+
+    #[test]
+    fn item_roundtrips_through_json() {
+        let item = comment_item();
+        let json = serde_json::to_string(&item).unwrap();
+        let back: Item = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, item);
     }
 }
