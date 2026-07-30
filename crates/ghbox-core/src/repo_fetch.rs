@@ -271,6 +271,27 @@ pub(crate) fn parse_comments(
     Ok((map, errors))
 }
 
+/// Folds per-chunk fetch results into one `(map, errors)`. A failed
+/// chunk contributes no keys — absent keys already mean "incomplete
+/// fetch, do not cache" to the caller — and surfaces its error message.
+#[allow(clippy::type_complexity, dead_code)]
+pub(crate) fn merge_chunk_results(
+    results: Vec<Result<(HashMap<String, Vec<CommentInfo>>, Vec<String>)>>,
+) -> (HashMap<String, Vec<CommentInfo>>, Vec<String>) {
+    let mut map = HashMap::new();
+    let mut errors = Vec::new();
+    for result in results {
+        match result {
+            Ok((chunk_map, chunk_errors)) => {
+                map.extend(chunk_map);
+                errors.extend(chunk_errors);
+            }
+            Err(e) => errors.push(e.to_string()),
+        }
+    }
+    (map, errors)
+}
+
 #[allow(clippy::type_complexity)]
 pub(crate) async fn fetch_comments(
     token: &str,
@@ -453,5 +474,47 @@ mod tests {
             number: 7,
         };
         assert_eq!(r.key(), "o/r#7");
+    }
+
+    #[test]
+    fn merge_chunk_results_merges_maps_and_partial_errors() {
+        let r1: crate::Result<(HashMap<String, Vec<CommentInfo>>, Vec<String>)> = Ok((
+            [("o/r#1".to_string(), vec![])].into_iter().collect(),
+            vec![],
+        ));
+        let r2 = Ok((
+            [("o/r#2".to_string(), vec![])].into_iter().collect(),
+            vec!["partial err".to_string()],
+        ));
+        let (map, errors) = merge_chunk_results(vec![r1, r2]);
+        assert!(map.contains_key("o/r#1"));
+        assert!(map.contains_key("o/r#2"));
+        assert_eq!(errors, vec!["partial err".to_string()]);
+    }
+
+    #[test]
+    fn merge_chunk_results_failed_chunk_yields_no_keys_but_surfaces_error() {
+        let ok: crate::Result<(HashMap<String, Vec<CommentInfo>>, Vec<String>)> = Ok((
+            [("o/r#1".to_string(), vec![])].into_iter().collect(),
+            vec![],
+        ));
+        let failed = Err(crate::Error::Api("boom".into()));
+        let (map, errors) = merge_chunk_results(vec![ok, failed]);
+        // 失敗チャンクのキーは不在のまま = 呼び出し側は「取得不完全」と
+        // 解釈してキャッシュしない(既存セマンティクス)
+        assert_eq!(map.len(), 1);
+        assert!(map.contains_key("o/r#1"));
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("boom"), "got: {}", errors[0]);
+    }
+
+    #[test]
+    fn merge_chunk_results_accumulates_errors_across_failed_chunks() {
+        let e1: crate::Result<(HashMap<String, Vec<CommentInfo>>, Vec<String>)> =
+            Err(crate::Error::Api("first".into()));
+        let e2 = Err(crate::Error::Api("second".into()));
+        let (map, errors) = merge_chunk_results(vec![e1, e2]);
+        assert!(map.is_empty());
+        assert_eq!(errors.len(), 2);
     }
 }
