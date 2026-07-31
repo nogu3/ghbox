@@ -185,6 +185,7 @@ mod tests {
             columns: vec![Column::Repo],
             filter,
             sort: SortKey::default(),
+            repos_updated_within_days: None,
         }
     }
 

@@ -46,6 +46,25 @@ pub struct Section {
     pub filter: SectionFilter,
     #[serde(default)]
     pub sort: SortKey,
+    /// Lower bound on `updatedAt` for PRs picked up by the `repos`
+    /// enumeration, in days back from now. Omitted = 30; 0 = unlimited.
+    /// Does not apply to `query` results (use `updated:>=` there).
+    #[serde(default)]
+    pub repos_updated_within_days: Option<u32>,
+}
+
+/// Default `repos` enumeration window when the config omits it.
+pub const DEFAULT_REPOS_WINDOW_DAYS: u32 = 30;
+
+impl Section {
+    /// Effective repos-enumeration window in days; `None` = unlimited.
+    pub fn repos_window_days(&self) -> Option<u32> {
+        match self.repos_updated_within_days {
+            None => Some(DEFAULT_REPOS_WINDOW_DAYS),
+            Some(0) => None,
+            Some(n) => Some(n),
+        }
+    }
 }
 
 /// Per-section sort timestamp: PR last update (default) or item creation
@@ -455,6 +474,7 @@ fn default_sections() -> Vec<Section> {
                 include_own: false,
             },
             sort: SortKey::default(),
+            repos_updated_within_days: None,
         },
         Section {
             title: "Review Requests".into(),
@@ -463,6 +483,7 @@ fn default_sections() -> Vec<Section> {
             columns: default_columns(),
             filter: SectionFilter::None,
             sort: SortKey::default(),
+            repos_updated_within_days: None,
         },
     ]
 }
@@ -525,6 +546,12 @@ impl Config {
             if section.query.is_none() && section.repos.is_empty() {
                 return Err(Error::Config(format!(
                     "section {:?}: needs `query`, `repos`, or both",
+                    section.title
+                )));
+            }
+            if section.repos_updated_within_days.is_some() && section.repos.is_empty() {
+                return Err(Error::Config(format!(
+                    "section {:?}: repos_updated_within_days only applies to `repos` sources",
                     section.title
                 )));
             }
@@ -993,5 +1020,42 @@ filter = { type = "command", command = "jq -r .id" }
             );
             assert!(parse(&toml).is_err(), "{extra} should be rejected");
         }
+    }
+
+    #[test]
+    fn repos_window_defaults_to_30_days() {
+        let cfg = parse("[[sections]]\ntitle = \"t\"\nrepos = [\"o/r\"]\n").unwrap();
+        assert_eq!(cfg.sections[0].repos_updated_within_days, None);
+        assert_eq!(cfg.sections[0].repos_window_days(), Some(30));
+    }
+
+    #[test]
+    fn repos_window_explicit_value() {
+        let cfg = parse(
+            "[[sections]]\ntitle = \"t\"\nrepos = [\"o/r\"]\nrepos_updated_within_days = 7\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.sections[0].repos_window_days(), Some(7));
+    }
+
+    #[test]
+    fn repos_window_zero_means_unlimited() {
+        let cfg = parse(
+            "[[sections]]\ntitle = \"t\"\nrepos = [\"o/r\"]\nrepos_updated_within_days = 0\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.sections[0].repos_window_days(), None);
+    }
+
+    #[test]
+    fn repos_window_without_repos_is_config_error() {
+        let err = parse(
+            "[[sections]]\ntitle = \"t\"\nquery = \"is:pr\"\nrepos_updated_within_days = 30\n",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("repos_updated_within_days"),
+            "got: {err}"
+        );
     }
 }

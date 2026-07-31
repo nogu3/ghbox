@@ -339,6 +339,7 @@ mod tests {
             columns: vec![],
             filter,
             sort: crate::config::SortKey::default(),
+            repos_updated_within_days: None,
         }
     }
 
