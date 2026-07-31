@@ -18,6 +18,17 @@ use crate::{Error, Result};
 /// secondary rate limits.
 const REPO_FETCH_CONCURRENCY: usize = 5;
 
+/// `now - days`, formatted RFC3339 UTC at second precision — the exact
+/// shape GitHub's `updatedAt` uses, so a lexicographic string compare is
+/// a correct time compare.
+pub(crate) fn cutoff_rfc3339(now: time::OffsetDateTime, days: u32) -> String {
+    (now - time::Duration::days(i64::from(days)))
+        .replace_nanosecond(0)
+        .expect("0 is a valid nanosecond")
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("UTC datetime always formats")
+}
+
 pub struct FetchOutcome {
     pub viewer_login: String,
     /// Parallel to the `Section` slice passed to `fetch`. `Err` means this
@@ -470,5 +481,17 @@ mod tests {
             cache.contains_key("x/y#5"),
             "repo x/y failed this poll — must not evict"
         );
+    }
+
+    #[test]
+    fn cutoff_rfc3339_formats_second_precision_utc() {
+        let now = time::macros::datetime!(2026-07-31 12:00:00.5 UTC);
+        assert_eq!(cutoff_rfc3339(now, 30), "2026-07-01T12:00:00Z");
+    }
+
+    #[test]
+    fn cutoff_rfc3339_zero_days_is_now() {
+        let now = time::macros::datetime!(2026-07-31 00:00:00 UTC);
+        assert_eq!(cutoff_rfc3339(now, 0), "2026-07-31T00:00:00Z");
     }
 }
