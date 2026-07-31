@@ -645,7 +645,7 @@ dependencies = [
 
 [[package]]
 name = "ghbox"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -659,7 +659,7 @@ dependencies = [
 
 [[package]]
 name = "ghbox-core"
-version = "1.2.0"
+version = "1.3.0"
 dependencies = [
  "dirs",
  "futures-util",
