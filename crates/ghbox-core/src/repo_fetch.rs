@@ -147,6 +147,18 @@ pub(crate) fn parse_repo_page(json: &str, repo: &str) -> Result<RepoPage> {
     })
 }
 
+/// Drops PRs whose `updatedAt` is older than `cutoff` (both RFC3339 UTC
+/// second-precision, so string compare is time compare). The enumeration
+/// query is UPDATED_AT DESC: once anything on a page is older, every
+/// later page is older too, so the cursor is cleared to stop pagination.
+pub(crate) fn apply_cutoff(page: &mut RepoPage, cutoff: &str) {
+    let before = page.prs.len();
+    page.prs.retain(|pr| pr.pr_updated_at.as_str() >= cutoff);
+    if page.prs.len() < before {
+        page.next_cursor = None;
+    }
+}
+
 pub(crate) struct RepoFetchResult {
     pub viewer_login: String,
     pub prs: Vec<PrData>,
@@ -155,7 +167,11 @@ pub(crate) struct RepoFetchResult {
 
 /// Enumerates every open PR of `repo` ("owner/name", validated at config
 /// load) across pages.
-pub(crate) async fn fetch_repo_open_prs(token: &str, repo: &str) -> Result<RepoFetchResult> {
+pub(crate) async fn fetch_repo_open_prs(
+    token: &str,
+    repo: &str,
+    cutoff: Option<&str>,
+) -> Result<RepoFetchResult> {
     let (owner, name) = repo
         .split_once('/')
         .ok_or_else(|| Error::Api(format!("invalid repo {repo:?}")))?;
@@ -171,7 +187,10 @@ pub(crate) async fn fetch_repo_open_prs(token: &str, repo: &str) -> Result<RepoF
         let text = graphql_post(token, &body)
             .await
             .map_err(|e| Error::Api(format!("repo {repo}: {e}")))?;
-        let page = parse_repo_page(&text, repo)?;
+        let mut page = parse_repo_page(&text, repo)?;
+        if let Some(cutoff) = cutoff {
+            apply_cutoff(&mut page, cutoff);
+        }
         if viewer_login.is_none() {
             viewer_login = Some(page.viewer_login);
         }
@@ -532,5 +551,32 @@ mod tests {
         let (map, errors) = merge_chunk_results(vec![e1, e2]);
         assert!(map.is_empty());
         assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn apply_cutoff_all_within_keeps_cursor() {
+        let mut page = parse_repo_page(PAGE_FIXTURE, "o/r").unwrap();
+        apply_cutoff(&mut page, "2026-07-01T00:00:00Z");
+        assert_eq!(page.prs.len(), 2);
+        assert_eq!(page.next_cursor.as_deref(), Some("CUR1"));
+    }
+
+    #[test]
+    fn apply_cutoff_drops_old_prs_and_stops_pagination() {
+        let mut page = parse_repo_page(PAGE_FIXTURE, "o/r").unwrap();
+        // Between the two PRs: #7 (07-20) is older, #8 (07-21) survives.
+        apply_cutoff(&mut page, "2026-07-21T00:00:00Z");
+        assert_eq!(page.prs.len(), 1);
+        assert_eq!(page.prs[0].pr_number, 8);
+        assert_eq!(page.next_cursor, None, "older PR seen => stop paginating");
+    }
+
+    #[test]
+    fn apply_cutoff_boundary_is_inclusive() {
+        let mut page = parse_repo_page(PAGE_FIXTURE, "o/r").unwrap();
+        // Exactly #7's timestamp: >= keeps it, nothing dropped.
+        apply_cutoff(&mut page, "2026-07-20T00:00:00Z");
+        assert_eq!(page.prs.len(), 2);
+        assert_eq!(page.next_cursor.as_deref(), Some("CUR1"));
     }
 }

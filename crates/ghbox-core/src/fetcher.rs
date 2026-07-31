@@ -195,7 +195,7 @@ impl Fetcher {
         };
         let repos_fut =
             futures_util::stream::iter(unique_repos.into_iter().map(|repo| async move {
-                let result = repo_fetch::fetch_repo_open_prs(token, &repo).await;
+                let result = repo_fetch::fetch_repo_open_prs(token, &repo, None).await;
                 (repo, result)
             }))
             .buffered(REPO_FETCH_CONCURRENCY)
