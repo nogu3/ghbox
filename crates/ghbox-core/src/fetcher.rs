@@ -318,9 +318,13 @@ impl Fetcher {
                     prs.as_slice()
                 })
                 .collect();
-            let section_cutoff = section
-                .repos_window_days()
-                .map(|days| cutoff_rfc3339(now, days));
+            let section_cutoff = if section.repos.is_empty() {
+                None
+            } else {
+                section
+                    .repos_window_days()
+                    .map(|days| cutoff_rfc3339(now, days))
+            };
             out_sections.push(Ok(merge_candidates(
                 search_prs,
                 &repo_lists,

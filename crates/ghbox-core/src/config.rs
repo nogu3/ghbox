@@ -56,6 +56,9 @@ pub struct Section {
 /// Default `repos` enumeration window when the config omits it.
 pub const DEFAULT_REPOS_WINDOW_DAYS: u32 = 30;
 
+/// Upper bound keeping `now - days` inside `time`'s supported range.
+pub const MAX_REPOS_WINDOW_DAYS: u32 = 36_500;
+
 impl Section {
     /// Effective repos-enumeration window in days; `None` = unlimited.
     pub fn repos_window_days(&self) -> Option<u32> {
@@ -552,6 +555,15 @@ impl Config {
             if section.repos_updated_within_days.is_some() && section.repos.is_empty() {
                 return Err(Error::Config(format!(
                     "section {:?}: repos_updated_within_days only applies to `repos` sources",
+                    section.title
+                )));
+            }
+            if section
+                .repos_updated_within_days
+                .is_some_and(|d| d > MAX_REPOS_WINDOW_DAYS)
+            {
+                return Err(Error::Config(format!(
+                    "section {:?}: repos_updated_within_days must be <= {MAX_REPOS_WINDOW_DAYS}",
                     section.title
                 )));
             }
@@ -1057,5 +1069,26 @@ filter = { type = "command", command = "jq -r .id" }
             err.to_string().contains("repos_updated_within_days"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn repos_window_above_max_is_config_error() {
+        let err = parse(
+            "[[sections]]\ntitle = \"t\"\nrepos = [\"o/r\"]\nrepos_updated_within_days = 36501\n",
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("repos_updated_within_days"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn repos_window_at_max_is_accepted() {
+        let cfg = parse(
+            "[[sections]]\ntitle = \"t\"\nrepos = [\"o/r\"]\nrepos_updated_within_days = 36500\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.sections[0].repos_window_days(), Some(36500));
     }
 }

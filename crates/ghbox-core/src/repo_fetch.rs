@@ -166,7 +166,9 @@ pub(crate) struct RepoFetchResult {
 }
 
 /// Enumerates every open PR of `repo` ("owner/name", validated at config
-/// load) across pages.
+/// load) across pages. With `Some(cutoff)`, only PRs with `updatedAt >=
+/// cutoff` are returned; since the query orders by `UPDATED_AT DESC`,
+/// pagination stops early at the first older PR.
 pub(crate) async fn fetch_repo_open_prs(
     token: &str,
     repo: &str,
