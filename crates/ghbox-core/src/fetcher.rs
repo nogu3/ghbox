@@ -54,16 +54,48 @@ fn key_of(pr: &PrData) -> String {
     format!("{}#{}", pr.repo, pr.pr_number)
 }
 
+/// Per unique repo, the widest effective window among the sections that
+/// reference it (`None` = some section wants unlimited). The repo is
+/// fetched once with this window; each section then re-filters its
+/// candidates down to its own window.
+pub(crate) fn repo_windows(sections: &[Section]) -> HashMap<String, Option<u32>> {
+    let mut map: HashMap<String, Option<u32>> = HashMap::new();
+    for section in sections {
+        let window = section.repos_window_days();
+        for repo in &section.repos {
+            map.entry(repo.clone())
+                .and_modify(|w| {
+                    *w = match (*w, window) {
+                        (Some(a), Some(b)) => Some(a.max(b)),
+                        _ => None,
+                    }
+                })
+                .or_insert(window);
+        }
+    }
+    map
+}
+
 /// Union of the search result (first, so its comment-carrying entries win
-/// dedup) and the section's repo enumerations.
-pub(crate) fn merge_candidates(search: Option<&[PrData]>, repo_lists: &[&[PrData]]) -> Vec<PrData> {
+/// dedup) and the section's repo enumerations. `repo_cutoff` drops
+/// repo-enumerated PRs older than the section's own window; search
+/// entries are exempt (the query can carry `updated:>=` itself).
+pub(crate) fn merge_candidates(
+    search: Option<&[PrData]>,
+    repo_lists: &[&[PrData]],
+    repo_cutoff: Option<&str>,
+) -> Vec<PrData> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
-    for pr in search
-        .unwrap_or_default()
-        .iter()
-        .chain(repo_lists.iter().flat_map(|l| l.iter()))
-    {
+    for pr in search.unwrap_or_default() {
+        if seen.insert(key_of(pr)) {
+            out.push(pr.clone());
+        }
+    }
+    for pr in repo_lists.iter().flat_map(|l| l.iter()) {
+        if repo_cutoff.is_some_and(|c| pr.pr_updated_at.as_str() < c) {
+            continue;
+        }
         if seen.insert(key_of(pr)) {
             out.push(pr.clone());
         }
@@ -184,18 +216,27 @@ impl Fetcher {
         // inside the buffered stream trip rustc's "implementation is not
         // general enough" limitation when the caller needs this future to be
         // `Send` (the TUI runs it on `tokio::spawn`).
-        let unique_repos: Vec<String> = {
+        let now = time::OffsetDateTime::now_utc();
+        let windows = repo_windows(sections);
+        let unique_repos: Vec<(String, Option<String>)> = {
             let mut seen = HashSet::new();
             sections
                 .iter()
                 .flat_map(|s| s.repos.iter())
                 .filter(|r| seen.insert(r.as_str()))
-                .cloned()
+                .map(|r| {
+                    let cutoff = windows
+                        .get(r.as_str())
+                        .copied()
+                        .flatten()
+                        .map(|days| cutoff_rfc3339(now, days));
+                    (r.clone(), cutoff)
+                })
                 .collect()
         };
         let repos_fut =
-            futures_util::stream::iter(unique_repos.into_iter().map(|repo| async move {
-                let result = repo_fetch::fetch_repo_open_prs(token, &repo, None).await;
+            futures_util::stream::iter(unique_repos.into_iter().map(|(repo, cutoff)| async move {
+                let result = repo_fetch::fetch_repo_open_prs(token, &repo, cutoff.as_deref()).await;
                 (repo, result)
             }))
             .buffered(REPO_FETCH_CONCURRENCY)
@@ -277,7 +318,14 @@ impl Fetcher {
                     prs.as_slice()
                 })
                 .collect();
-            out_sections.push(Ok(merge_candidates(search_prs, &repo_lists)));
+            let section_cutoff = section
+                .repos_window_days()
+                .map(|days| cutoff_rfc3339(now, days));
+            out_sections.push(Ok(merge_candidates(
+                search_prs,
+                &repo_lists,
+                section_cutoff.as_deref(),
+            )));
         }
 
         // 5. Comment diff-fetch for comment-mention sections.
@@ -390,7 +438,7 @@ mod tests {
             pr("o/r", 1, "2026-07-01T00:00:00Z", false),
             pr("o/r", 2, "2026-07-01T00:00:00Z", false),
         ];
-        let merged = merge_candidates(Some(&search), &[&repo_list]);
+        let merged = merge_candidates(Some(&search), &[&repo_list], None);
         assert_eq!(merged.len(), 2);
         let one = merged.iter().find(|p| p.pr_number == 1).unwrap();
         assert!(one.comments_fetched, "search version (with comments) wins");
@@ -399,8 +447,60 @@ mod tests {
     #[test]
     fn merge_candidates_dedups_across_repo_lists() {
         let list = vec![pr("o/r", 1, "2026-07-01T00:00:00Z", false)];
-        let merged = merge_candidates(None, &[&list, &list]);
+        let merged = merge_candidates(None, &[&list, &list], None);
         assert_eq!(merged.len(), 1);
+    }
+
+    fn repo_section(repos: &[&str], window: Option<u32>) -> Section {
+        Section {
+            title: "t".into(),
+            query: None,
+            repos: repos.iter().map(|s| s.to_string()).collect(),
+            columns: Vec::new(),
+            filter: SectionFilter::None,
+            sort: Default::default(),
+            repos_updated_within_days: window,
+        }
+    }
+
+    #[test]
+    fn repo_windows_takes_max_across_sections() {
+        let sections = [
+            repo_section(&["o/r"], Some(7)),
+            repo_section(&["o/r", "o/other"], Some(60)),
+        ];
+        let w = repo_windows(&sections);
+        assert_eq!(w["o/r"], Some(60));
+        assert_eq!(w["o/other"], Some(60));
+    }
+
+    #[test]
+    fn repo_windows_unlimited_section_wins() {
+        let sections = [
+            repo_section(&["o/r"], Some(7)),
+            repo_section(&["o/r"], Some(0)), // 0 = unlimited
+        ];
+        assert_eq!(repo_windows(&sections)["o/r"], None);
+    }
+
+    #[test]
+    fn repo_windows_default_is_30() {
+        let sections = [repo_section(&["o/r"], None)];
+        assert_eq!(repo_windows(&sections)["o/r"], Some(30));
+    }
+
+    #[test]
+    fn merge_candidates_cutoff_drops_old_repo_prs_but_keeps_search_prs() {
+        // pr(repo, number, updated_at, comments_fetched) is the existing test helper
+        let search = vec![pr("o/r", 1, "2026-06-01T00:00:00Z", true)];
+        let repo_list = vec![
+            pr("o/r", 2, "2026-06-01T00:00:00Z", false),
+            pr("o/r", 3, "2026-07-30T00:00:00Z", false),
+        ];
+        let merged = merge_candidates(Some(&search), &[&repo_list], Some("2026-07-01T00:00:00Z"));
+        let numbers: Vec<u64> = merged.iter().map(|p| p.pr_number).collect();
+        // the old search-sourced PR stays; only the old repo-sourced PR is dropped
+        assert_eq!(numbers, vec![1, 3]);
     }
 
     #[test]
