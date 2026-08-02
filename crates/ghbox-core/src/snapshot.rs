@@ -55,8 +55,8 @@ pub fn default_path() -> PathBuf {
 pub fn section_fingerprint(section: &Section) -> String {
     let mut h = DefaultHasher::new();
     format!(
-        "{:?}|{:?}|{:?}|{:?}",
-        section.query, section.repos, section.filter, section.sort
+        "{:?}|{:?}|{:?}|{:?}|{:?}",
+        section.query, section.repos, section.filter, section.sort, section.repos_updated_within_days
     )
     .hash(&mut h);
     format!("{:016x}", h.finish())
@@ -219,6 +219,14 @@ mod tests {
             section_fingerprint(&section("A", "q")),
             section_fingerprint(&with_filter),
         );
+    }
+
+    #[test]
+    fn fingerprint_changes_with_repos_window() {
+        let a = section("A", "q");
+        let mut b = section("A", "q");
+        b.repos_updated_within_days = Some(7);
+        assert_ne!(section_fingerprint(&a), section_fingerprint(&b));
     }
 
     #[test]
