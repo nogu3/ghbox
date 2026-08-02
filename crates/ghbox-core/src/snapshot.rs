@@ -56,7 +56,11 @@ pub fn section_fingerprint(section: &Section) -> String {
     let mut h = DefaultHasher::new();
     format!(
         "{:?}|{:?}|{:?}|{:?}|{:?}",
-        section.query, section.repos, section.filter, section.sort, section.repos_updated_within_days
+        section.query,
+        section.repos,
+        section.filter,
+        section.sort,
+        section.repos_updated_within_days
     )
     .hash(&mut h);
     format!("{:016x}", h.finish())

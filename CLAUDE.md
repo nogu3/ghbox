@@ -41,9 +41,9 @@ Future: let mando call ghbox-core too (HTTP endpoint or direct dependency).
    request `comments(last: 50)`, review-requested sections request `reviewRequests`
    (search strings passed as variables)
 2. Separately enumerate every unique repo named in a `repos` list: one paginated
-   GraphQL request per repo, open PRs only — immune to search-index lag. The
-   search request and the repo enumerations all run concurrently (repo requests
-   capped at a small in-flight limit)
+   GraphQL request per repo, open PRs updated within the section's window only —
+   immune to search-index lag. The search request and the repo enumerations all
+   run concurrently (repo requests capped at a small in-flight limit)
 3. Per section, merge candidates = its search matches ∪ its repos' enumerated PRs,
    deduped by repo+PR number (the search entry wins, since it may already carry
    comments)
@@ -71,7 +71,10 @@ columns + sort). Without a config, two built-in default sections are used
 - Source: `query` (GitHub search string) and/or `repos` (`["owner/name", ...]`,
   direct open-PR enumeration); at least one is required, both = union deduped by
   PR. `repos` is immune to search-index lag — recommended for "ball is in your
-  court" sections over known repos; keep `query` for broad discovery
+  court" sections over known repos; keep `query` for broad discovery.
+  `repos` only picks up PRs updated within the last `repos_updated_within_days`
+  days (default 30; `0` = unlimited; config error on query-only sections) —
+  enumeration is `UPDATED_AT DESC`, so pagination stops at the first too-old PR
 - Filter types: none / `comment-mention` (same-comment mention+merge; the core
   logic; `include_own = true` also surfaces the viewer's own comments, for
   memos to self) / `review-requested` (open PRs where the viewer is still a

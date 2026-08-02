@@ -48,6 +48,9 @@ union the results, deduped by PR. `repos` is immune to GitHub search-index lag â
 recommended for "ball is in your court" sections over repos you already know, while
 `query` stays useful for broader discovery.
 
+`repos` enumeration only picks up PRs updated within the last 30 days by
+default; tune per section with `repos_updated_within_days` (`0` = unlimited).
+
 ```toml
 poll_interval_secs = 300            # polling interval in seconds (min 30)
 db_path = "/nas/ghbox/state.db"     # done-state DB. Default: $XDG_DATA_HOME/ghbox/state.db
@@ -69,6 +72,7 @@ query = "is:pr is:open review-requested:@me"
 [[sections]]
 title = "Merge Requests (big-repo)"
 repos = ["myorg/big-repo"]           # direct enumeration instead of query â€” no index lag
+repos_updated_within_days = 30       # default 30; 0 = unlimited. repos sources only
 filter = { type = "comment-mention" }
 
 [[sections]]
