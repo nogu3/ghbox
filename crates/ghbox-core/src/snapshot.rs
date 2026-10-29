@@ -284,11 +284,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("snapshot.json");
         let sections = [section("A", "q")];
-        let snap = build(
-            &sections,
-            &displayed(vec![], vec![])[..1].to_vec(),
-            "t".into(),
-        );
+        let snap = build(&sections, &displayed(vec![], vec![])[..1], "t".into());
         let mut value = serde_json::to_value(&snap).unwrap();
         value["version"] = serde_json::json!(SNAPSHOT_VERSION + 1);
         std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
@@ -323,13 +319,13 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let one = build(
             &sections,
-            &displayed(vec![pr_item(1)], vec![])[..1].to_vec(),
+            &displayed(vec![pr_item(1)], vec![])[..1],
             "t1".into(),
         );
         save(&path, &one).unwrap();
         let two = build(
             &sections,
-            &displayed(vec![pr_item(2)], vec![])[..1].to_vec(),
+            &displayed(vec![pr_item(2)], vec![])[..1],
             "t2".into(),
         );
         save(&path, &two).unwrap();

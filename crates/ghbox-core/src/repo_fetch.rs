@@ -350,6 +350,9 @@ pub(crate) async fn fetch_comments(
 mod tests {
     use super::*;
 
+    /// `merge_chunk_results` に渡す 1 チャンク分の結果。
+    type ChunkResult = crate::Result<(HashMap<String, Vec<CommentInfo>>, Vec<String>)>;
+
     const PAGE_FIXTURE: &str = r#"{
       "data": {
         "viewer": { "login": "nogu3" },
@@ -515,7 +518,7 @@ mod tests {
 
     #[test]
     fn merge_chunk_results_merges_maps_and_partial_errors() {
-        let r1: crate::Result<(HashMap<String, Vec<CommentInfo>>, Vec<String>)> = Ok((
+        let r1: ChunkResult = Ok((
             [("o/r#1".to_string(), vec![])].into_iter().collect(),
             vec![],
         ));
@@ -531,7 +534,7 @@ mod tests {
 
     #[test]
     fn merge_chunk_results_failed_chunk_yields_no_keys_but_surfaces_error() {
-        let ok: crate::Result<(HashMap<String, Vec<CommentInfo>>, Vec<String>)> = Ok((
+        let ok: ChunkResult = Ok((
             [("o/r#1".to_string(), vec![])].into_iter().collect(),
             vec![],
         ));
@@ -547,8 +550,7 @@ mod tests {
 
     #[test]
     fn merge_chunk_results_accumulates_errors_across_failed_chunks() {
-        let e1: crate::Result<(HashMap<String, Vec<CommentInfo>>, Vec<String>)> =
-            Err(crate::Error::Api("first".into()));
+        let e1: ChunkResult = Err(crate::Error::Api("first".into()));
         let e2 = Err(crate::Error::Api("second".into()));
         let (map, errors) = merge_chunk_results(vec![e1, e2]);
         assert!(map.is_empty());
